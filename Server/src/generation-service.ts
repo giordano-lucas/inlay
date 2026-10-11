@@ -181,6 +181,8 @@ export class GenerationService {
   private queue: Promise<unknown> = Promise.resolve();
   private subscribers = new Map<string, Set<Watcher>>();
   private livePreviewRunning = false;
+  /** The in-flight live preview; sealed takes wait for it to free the helper. */
+  private livePreview: Promise<void> = Promise.resolve();
   private livePreviewAt = new Map<string, number>();
   private readonly imports: WisprFlowImports;
   private constructor(
@@ -1054,6 +1056,9 @@ export class GenerationService {
       });
       if (!record) return;
       const settings = record.settings.preferences;
+      // The speech helper runs one request at a time; let a live preview finish.
+      await this.livePreview;
+      signal.throwIfAborted();
       const speech = await this.inference.transcribe(
         join(this.directory(id), "inference.wav"),
         settings.language,
@@ -1254,7 +1259,7 @@ export class GenerationService {
     this.livePreviewAt.set(id, Date.now());
     this.livePreviewRunning = true;
     const windowBytes = Math.min(upload.bytes, sampleRate * LIVE_PREVIEW_WINDOW_SECONDS * 4);
-    void this.runLivePreview(id, upload.bytes - windowBytes, windowBytes, sampleRate)
+    this.livePreview = this.runLivePreview(id, upload.bytes - windowBytes, windowBytes, sampleRate)
       .catch(() => {})
       .finally(() => {
         this.livePreviewRunning = false;
