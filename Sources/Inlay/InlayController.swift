@@ -124,7 +124,7 @@ final class InlayController: ObservableObject {
             if !showDetectedLanguage { detectedLanguage = nil }
         }
     }
-    /// The latest take's language, shown beside the HUD result.
+    /// The language the server hears in the take being recorded.
     @Published private(set) var detectedLanguage: SpokenLanguage?
     @Published var statusMessage = "Connecting to server…"
     @Published private(set) var serverHealth: ServerHealth?
@@ -168,6 +168,8 @@ final class InlayController: ObservableObject {
     private let serverClientFactory: (() throws -> ServerClient)?
     private let hotkey = HotkeyMonitor()
     private let outputMuter = SystemOutputMuter()
+    private var livePreviewTask: Task<Void, Never>?
+    private var pendingLanguage: SpokenLanguage?
     private var subscriptions: Set<AnyCancellable> = []
     private var applyingConfiguration = false
     private var recordingTimer: Timer?
@@ -751,6 +753,7 @@ final class InlayController: ObservableObject {
         uploadPipe?.cancel(); uploadPipe = nil
         uploadTask?.cancel(); uploadTask = nil
         destinationTask?.cancel(); destinationTask = nil
+        livePreviewTask?.cancel(); livePreviewTask = nil
         stopRecordingTimer()
         recorder.cancel()
         outputMuter.restore()
@@ -761,6 +764,24 @@ final class InlayController: ObservableObject {
         activeGenerationID = nil
         activeClient = nil
         recordingFeedback.reset()
+    }
+
+    /// Follows the server's live preview of the take being recorded and shows the
+    /// language it hears. Release, cancellation, or failure stops following.
+    private func watchLivePreview(_ id: UUID, connection: ServerClient, session: UUID) {
+        livePreviewTask?.cancel()
+        livePreviewTask = Task {
+            _ = try? await connection.events(id) { record in
+                guard let text = record.livePreviewText, let language = SpokenLanguage.detect(in: text) else { return }
+                await MainActor.run { [weak self] in
+                    guard let self, sessionID == session, isCapturing, showDetectedLanguage else { return }
+                    // Show the first language at once; switch only when two
+                    // previews in a row agree, so half-heard words do not flicker.
+                    if detectedLanguage == nil || language == pendingLanguage { detectedLanguage = language }
+                    pendingLanguage = language == detectedLanguage ? nil : language
+                }
+            }
+        }
     }
 
     private func failSession(_ message: String, cancelServer: Bool) {
@@ -874,6 +895,7 @@ final class InlayController: ObservableObject {
         recordingInputName = input.name
         recordingFeedback.reset()
         detectedLanguage = nil
+        pendingLanguage = nil
         activity = .starting
         statusMessage = "Connecting recording…"
         onHUDVisibility?(true)
@@ -901,6 +923,7 @@ final class InlayController: ObservableObject {
                 guard created.status == .receiving else { throw ServerClientError.invalidResponse }
                 activeGenerationID = created.id
                 activeClient = connection
+                if showDetectedLanguage { watchLivePreview(created.id, connection: connection, session: current) }
                 sharedPreferences = created.settings
                 let pipe = AudioChunkPipe { [weak self] error in
                     Task { @MainActor [weak self] in
@@ -952,6 +975,7 @@ final class InlayController: ObservableObject {
         hotkey.clearLatchedTake()
         recorder.stopAcceptingAudio()
         outputMuter.restore()
+        livePreviewTask?.cancel(); livePreviewTask = nil
         guard activity == .recording else { cancelDictation(); return }
         let releasedAt = ProcessInfo.processInfo.systemUptime
         destinationTask?.finish()
@@ -1104,9 +1128,6 @@ final class InlayController: ObservableObject {
                          anchor: DictationDestination?, isTest: Bool, clipboardCount: Int,
                          session: UUID) async -> DeliveryReceipt {
         var transcript = record.previewText.isEmpty ? record.finalText : record.previewText
-        if sessionID == session {
-            detectedLanguage = showDetectedLanguage ? SpokenLanguage.detect(in: record.finalText) : nil
-        }
         let message: String
         let deliveryStatus: DictationDeliveryStatus
         let status: String

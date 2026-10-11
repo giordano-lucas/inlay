@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, mkdir, open, readdir, rename, rm } from "node:fs/promises";
+import { access, mkdir, open, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
@@ -153,6 +153,11 @@ interface Upload {
   chunks: { offset: number; count: number }[];
   bytes: number;
 }
+/** Live previews read the newest seconds of a take that is still recording. */
+const LIVE_PREVIEW_INTERVAL_MS = 1000;
+const LIVE_PREVIEW_MIN_SECONDS = 1.2;
+const LIVE_PREVIEW_WINDOW_SECONDS = 8;
+
 interface Watcher {
   queue: GenerationRecord[];
   wake?: () => void;
@@ -175,6 +180,8 @@ export class GenerationService {
   private timer?: ReturnType<typeof setInterval>;
   private queue: Promise<unknown> = Promise.resolve();
   private subscribers = new Map<string, Set<Watcher>>();
+  private livePreviewRunning = false;
+  private livePreviewAt = new Map<string, number>();
   private readonly imports: WisprFlowImports;
   private constructor(
     private readonly configuration: ServiceConfiguration,
@@ -621,6 +628,7 @@ export class GenerationService {
       this.uploads.set(id, streams);
       record.updatedAt = now();
       this.records.set(id, record);
+      if (kind === "inference") this.scheduleLivePreview(id, upload);
       return {
         nextSequence: upload.chunks.length,
         frameCount: upload.bytes / (format.channels * 4),
@@ -684,6 +692,8 @@ export class GenerationService {
         );
       const previous = this.continuation(request.continuationID, record);
       try {
+        delete record.livePreviewText;
+        this.livePreviewAt.delete(id);
         record.inferenceAudio = await this.seal(id, "inference", speech);
         if (original) record.originalAudio = await this.seal(id, "original", original);
         record.status = "queued";
@@ -1225,6 +1235,60 @@ export class GenerationService {
     if (watcher.queue.length > 8) watcher.queue.shift();
     watcher.wake?.();
   }
+  /**
+   * Recognize the newest seconds of a recording with the same speech model, so
+   * a client can show what is being heard before release. Runs one at a time,
+   * only while no sealed take is processing, and never cancels the helper.
+   */
+  private scheduleLivePreview(id: string, upload: Upload) {
+    if (this.livePreviewRunning || this.processingControllers.size || this.stopping) return;
+    const { sampleRate, channels } = upload.format;
+    if (sampleRate !== 16_000 || channels !== 1) return;
+    const frames = upload.bytes / 4;
+    if (frames < sampleRate * LIVE_PREVIEW_MIN_SECONDS) return;
+    const last = this.livePreviewAt.get(id) ?? 0;
+    if (Date.now() - last < LIVE_PREVIEW_INTERVAL_MS) return;
+    this.livePreviewAt.set(id, Date.now());
+    this.livePreviewRunning = true;
+    const windowBytes = Math.min(upload.bytes, sampleRate * LIVE_PREVIEW_WINDOW_SECONDS * 4);
+    void this.runLivePreview(id, upload.bytes - windowBytes, windowBytes, sampleRate)
+      .catch(() => {})
+      .finally(() => {
+        this.livePreviewRunning = false;
+      });
+  }
+  private async runLivePreview(id: string, offset: number, length: number, sampleRate: number) {
+    const directory = this.directory(id);
+    const samples = Buffer.alloc(length);
+    const file = await open(
+      join(directory, "inference.raw"),
+      constants.O_RDONLY | constants.O_NOFOLLOW,
+    );
+    try {
+      await file.read(samples, 0, length, offset);
+    } finally {
+      await file.close();
+    }
+    const path = join(directory, "live-preview.wav");
+    await writeFile(path, Buffer.concat([floatWavHeader(length, sampleRate), samples]), {
+      mode: 0o600,
+    });
+    const record = this.records.get(id);
+    if (!record || record.status !== "receiving") return;
+    try {
+      const speech = await this.inference.transcribe(
+        path,
+        record.settings.preferences.language,
+        [],
+      );
+      const current = this.records.get(id);
+      if (!current || current.status !== "receiving" || !speech.text) return;
+      current.livePreviewText = speech.text;
+      for (const watcher of this.subscribers.get(id) ?? []) this.yieldTo(watcher, current);
+    } finally {
+      await rm(path, { force: true }).catch(() => {});
+    }
+  }
   private progress(id: string, value: number) {
     const record = this.records.get(id);
     if (!record || record.status !== "transcribing" || !Number.isFinite(value)) return;
@@ -1238,6 +1302,7 @@ export class GenerationService {
       "original.raw",
       "inference.wav.partial",
       "original.wav.partial",
+      "live-preview.wav",
     ])
       await rm(join(this.directory(id), name), { force: true }).catch(() => {});
   }
@@ -1279,4 +1344,23 @@ export class GenerationService {
   private get proofBackend() {
     return process.platform === "darwin" ? "MLX" : "llama.cpp";
   }
+}
+
+/** A mono IEEE-float WAV header for raw little-endian float32 samples. */
+function floatWavHeader(dataBytes: number, sampleRate: number) {
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + dataBytes, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(3, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 4, 28);
+  header.writeUInt16LE(4, 32);
+  header.writeUInt16LE(32, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(dataBytes, 40);
+  return header;
 }

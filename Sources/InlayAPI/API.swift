@@ -341,6 +341,8 @@ public struct GenerationRecord: Codable, Equatable, Sendable, Identifiable {
     public var insertionText: String
     public var previewText: String
     public var detectedLanguage: String?
+    /// Words recognized from the newest seconds of a take that is still recording.
+    public var livePreviewText: String?
     public var speech: ModelProvenance?
     public var proofreading: ModelProvenance?
     public var textProcessing: TextProcessingRecord?

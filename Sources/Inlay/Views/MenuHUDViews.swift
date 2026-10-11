@@ -98,7 +98,9 @@ struct DictationHUD: View {
     static let height: CGFloat = 44
     static let noticeHeight: CGFloat = 30
     static let morphDuration = 0.18
-    static let badgeGap: CGFloat = 6
+    /// Extra capsule width while a live language badge shows.
+    static let languageWidth: CGFloat = 50
+    static let containerWidth: CGFloat = width + languageWidth
     @ObservedObject var controller: InlayController
     @ObservedObject var presentation: DictationHUDPresentation
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -107,10 +109,13 @@ struct DictationHUD: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // The capsule grows to the right for the language badge; its left
+            // edge and the contracted circle stay where they were.
             capsule
-                .frame(width: Self.width, height: Self.height)
+                .padding(.leading, expanded ? Self.languageWidth / 2 : (Self.containerWidth - Self.height) / 2)
+                .frame(width: Self.containerWidth, height: Self.height, alignment: .leading)
             RecordingLimitNote(feedback: controller.recordingFeedback)
-                .frame(width: Self.width, height: Self.noticeHeight)
+                .frame(width: Self.containerWidth, height: Self.noticeHeight)
         }
         .task(id: presentation.id) { await enter() }
         .onChange(of: controller.activity) { _, activity in
@@ -148,7 +153,7 @@ struct DictationHUD: View {
     private var capsule: some View {
         ZStack {
             expandedContent
-                .frame(width: Self.width, height: Self.height)
+                .frame(width: capsuleWidth, height: Self.height)
                 .opacity(expanded ? 1 : 0)
                 .allowsHitTesting(expanded)
                 .accessibilityHidden(!expanded)
@@ -165,7 +170,7 @@ struct DictationHUD: View {
             .accessibilityHint(controller.isBusy ? "Cancel this dictation" : result.needsAttention ? "Open Inlay for details" : "Dismiss status")
             .accessibilityIdentifier("hud.circle")
         }
-        .frame(width: expanded ? Self.width : Self.height, height: Self.height)
+        .frame(width: expanded ? capsuleWidth : Self.height, height: Self.height)
         .clipped()
         .modifier(InlayFloatingSurface(cornerRadius: Self.height / 2))
         .overlay(alignment: .topTrailing) {
@@ -173,20 +178,7 @@ struct DictationHUD: View {
                 DevBadge().offset(x: 10, y: -6).allowsHitTesting(false)
             }
         }
-        .overlay(alignment: .trailing) {
-            if let language = shownLanguage {
-                LanguageBadge(language: language)
-                    // Sit just outside the circle's right edge.
-                    .alignmentGuide(HorizontalAlignment.trailing) { $0[.leading] - Self.badgeGap }
-                    .transition(reduceMotion ? .opacity : .asymmetric(
-                        insertion: .scale(scale: 0.3, anchor: .leading)
-                            .combined(with: .offset(x: -Self.height / 2))
-                            .combined(with: .opacity),
-                        removal: .opacity))
-            }
-        }
-        .animation(reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.3).delay(Self.morphDuration),
-                   value: shownLanguage)
+        .animation(reduceMotion ? nil : .spring(duration: 0.35, bounce: 0.25), value: liveLanguage)
         .scaleEffect(entered ? 1 : 0.25)
         .opacity(entered ? 1 : 0)
         .onExitCommand {
@@ -214,6 +206,11 @@ struct DictationHUD: View {
             }
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(InlayPalette.muted)
+            if let language = liveLanguage {
+                LanguageBadge(language: language)
+                    .id(language.code)
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.4, anchor: .leading).combined(with: .opacity))
+            }
             Button { controller.cancelDictation() } label: {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
                     .frame(width: 22, height: 28)
@@ -241,11 +238,12 @@ struct DictationHUD: View {
         }
     }
 
-    /// Expands from the result circle once the capsule has contracted.
-    private var shownLanguage: SpokenLanguage? {
-        guard !expanded, controller.activity == .success || controller.activity == .failed else { return nil }
-        return controller.detectedLanguage
+    /// What the server currently hears, while the take is recording.
+    private var liveLanguage: SpokenLanguage? {
+        controller.isRecording ? controller.detectedLanguage : nil
     }
+
+    private var capsuleWidth: CGFloat { Self.width + (liveLanguage == nil ? 0 : Self.languageWidth) }
 
     private var result: DictationDeliveryStatus {
         controller.activity == .failed ? .failed : controller.lastDeliveryStatus
@@ -281,10 +279,10 @@ struct LanguageBadge: View {
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .foregroundStyle(InlayPalette.ink)
         }
-        .padding(.horizontal, 8)
-        .frame(height: 26)
+        .padding(.horizontal, 7)
+        .frame(height: 22)
         .fixedSize()
-        .modifier(InlayFloatingSurface(cornerRadius: 13))
+        .background(InlayPalette.ink.opacity(0.1), in: Capsule())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Detected language: \(language.name)")
         .accessibilityIdentifier("hud.language")

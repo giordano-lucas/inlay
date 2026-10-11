@@ -517,6 +517,8 @@ export interface components {
       insertionText: string;
       previewText: string;
       detectedLanguage?: string;
+      /** @description Recognized words from the latest seconds of a take that is still receiving audio. Not stored. */
+      livePreviewText?: string;
       speech?: components["schemas"]["ModelProvenance"];
       proofreading?: components["schemas"]["ModelProvenance"];
       textProcessing?: components["schemas"]["TextProcessingRecord"];

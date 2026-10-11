@@ -1,8 +1,8 @@
 import Foundation
 import NaturalLanguage
 
-/// The language of a finished transcript, detected on device. Parakeet reports
-/// no language ID, so detection reads the text and is limited to its languages.
+/// The language of recognized text, detected on device. Parakeet reports no
+/// language ID, so detection reads its words and is limited to its languages.
 struct SpokenLanguage: Equatable, Sendable {
     let code: String
 
@@ -12,9 +12,17 @@ struct SpokenLanguage: Equatable, Sendable {
     /// Short or ambiguous text ("OK.", "Hello.") shows no language at all.
     static let minimumConfidence = 0.5
 
+    /// The recognizable languages listed in Language & Region. Choosing between a
+    /// speaker's own languages is far steadier on half-recognized speech.
+    static var candidates: [String] {
+        let preferred = Set(Locale.preferredLanguages.compactMap { Locale.Language(identifier: $0).languageCode?.identifier })
+        let own = recognizable.filter(preferred.contains)
+        return own.count >= 2 ? own : recognizable
+    }
+
     static func detect(in text: String) -> SpokenLanguage? {
         let recognizer = NLLanguageRecognizer()
-        recognizer.languageConstraints = recognizable.map { NLLanguage(rawValue: $0) }
+        recognizer.languageConstraints = candidates.map { NLLanguage(rawValue: $0) }
         recognizer.processString(text)
         guard let (language, confidence) = recognizer.languageHypotheses(withMaximum: 1).first,
               confidence >= minimumConfidence else { return nil }
