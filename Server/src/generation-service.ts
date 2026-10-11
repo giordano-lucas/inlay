@@ -1062,8 +1062,8 @@ export class GenerationService {
       const speech = await this.inference.transcribe(
         join(this.directory(id), "inference.wav"),
         settings.language,
-        // Parakeet has no vocabulary prompt; dictionary rules apply after recognition.
-        [],
+        // Dictionary terms bias Parakeet's decoding toward their spelling.
+        dictionaryVocabularyTerms(settings.dictionary),
         (value) => {
           void this.mutate(() => this.progress(id, value));
         },
@@ -1287,7 +1287,7 @@ export class GenerationService {
       const speech = await this.inference.transcribe(
         path,
         record.settings.preferences.language,
-        [],
+        dictionaryVocabularyTerms(record.settings.preferences.dictionary),
       );
       const current = this.records.get(id);
       if (!current || current.status !== "receiving" || !speech.text) return;

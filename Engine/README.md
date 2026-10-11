@@ -17,7 +17,7 @@ After loading Parakeet and Silero VAD, the helper emits a `ready` JSON object wi
 ```
 
 - `language` defaults to `en`. Accepts `auto` and the model's 25 supported language codes: `bg`, `hr`, `cs`, `da`, `nl`, `en`, `et`, `fi`, `fr`, `de`, `el`, `hu`, `it`, `lv`, `lt`, `mt`, `pl`, `pt`, `ro`, `sk`, `sl`, `es`, `sv`, `ru`, `uk`. Legacy preferences `ja`, `zh`, `ko`, `hi`, and `ar` also remain accepted for proofreading; they do not expand speech recognition support. Recognition always chooses the spoken language automatically. Results return `language: "auto"` because this runtime exposes no language ID. The server omits detected-language metadata and uses the preference only for Qwen proofreading.
-- `vocabularyTerms` remains accepted and validated for protocol compatibility. Parakeet has no vocabulary prompting API: `includedTerms` is empty, `omittedTerms` contains every supplied term, and `tokenCount` / `tokenBudget` are zero. Dictionary replacements and Qwen hints remain available after recognition.
+- `vocabularyTerms` biases greedy decoding toward each term (phrase boosting, [Engine/patches](patches)). When any term is usable, `includedTerms` lists every supplied term, `omittedTerms` is empty, `tokenCount` is the number of boosted terms, and `tokenBudget` is the term count; otherwise they report no hints. `INLAY_PHRASE_BOOST` sets the log-probability bonus (default 12; 0 disables it).
 - WAV input must be mono 16 kHz PCM16 or float32, 0.2–180 seconds long. The HTTP server uses a 0.25-second minimum.
 - Progress: `{"type":"progress","id":"request-1","value":0.5}`. Updates depend on the upstream callback; large encodes can spend time without intermediate progress.
 - Results contain `type: "result"`, `id`, `text`, audio `duration`, processing `elapsed`, `language`, and hint diagnostics.
@@ -33,4 +33,8 @@ The server keeps the model warm. Terminating the helper cancels active work. `{"
 
 ## Verify
 
-Build with `./scripts/build-server.sh`, then use **Inlay Dev** to record speech and inspect progress, transcripts, and the unavailable recognition-vocabulary status in history. Verify cancellation and subsequent recordings interactively when changing helper lifecycle behavior. See [the development guide](../docs/development.md). Automated test harnesses are not allowed.
+Build with `./scripts/build-server.sh`, then use **Inlay Dev** to record speech and inspect progress, transcripts, and the raw versus final text of dictionary terms in history. Verify cancellation and subsequent recordings interactively when changing helper lifecycle behavior. See [the development guide](../docs/development.md). Automated test harnesses are not allowed.
+
+## Patches to the speech runtime
+
+`vendor/whisper.cpp` stays an unmodified upstream checkout. Inlay's changes to it live in `patches/*.patch`; the engine's CMake build copies the submodule into the build tree and applies them there, recopying when a patch or a file it touches changes. `0001-parakeet-phrase-boost.patch` adds `parakeet_set_boost_phrases` to Parakeet's greedy decoder. After updating the submodule, rebuild; a patch that no longer applies stops the build and must be refreshed against the new version.

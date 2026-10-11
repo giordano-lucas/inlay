@@ -1,0 +1,183 @@
+diff --git a/include/parakeet.h b/include/parakeet.h
+index d35aa870..e4c3fcdb 100644
+--- a/include/parakeet.h
++++ b/include/parakeet.h
+@@ -150,6 +150,11 @@ extern "C" {
+     // Returns the number of tokens on success, no more than n_max_tokens
+     // Returns a negative number on failure - the number of tokens that would have been returned
+     // TODO: not sure if correct
++    // Bias greedy decoding toward phrases (names, brands, jargon). Each phrase is
++    // tokenized as a word; tokens that start or continue one gain `score` (half
++    // for a start) in log-probability. n_phrases = 0 clears it. Returns phrases kept.
++    PARAKEET_API int parakeet_set_boost_phrases(struct parakeet_context * ctx, const char ** phrases, int n_phrases, float score);
++
+     PARAKEET_API int parakeet_tokenize(
+             struct parakeet_context * ctx,
+                         const char * text,
+diff --git a/src/parakeet.cpp b/src/parakeet.cpp
+index 59ad5c73..9a274713 100644
+--- a/src/parakeet.cpp
++++ b/src/parakeet.cpp
+@@ -20,6 +20,7 @@
+ #include <functional>
+ #include <cctype>
+ #include <map>
++#include <unordered_map>
+ #include <random>
+ #include <set>
+ #include <string>
+@@ -506,7 +507,35 @@ struct parakeet_mel_cache {
+     }
+ };
+ 
++// Phrase boosting. Each phrase is matched by characters, not one fixed token
++// split: at every offset, any vocabulary piece that continues the phrase
++// (ASCII case-insensitive) may be boosted, however the model segments it.
++struct parakeet_boost_phrase {
++    // steps[offset] = (token, characters consumed) for pieces matching there.
++    std::vector<std::vector<std::pair<int32_t, int32_t>>> steps;
++};
++
++struct parakeet_boost {
++    std::vector<parakeet_boost_phrase> phrases;
++    float score = 0.0f;
++    // Share of the bonus for starting a phrase. Starts can replace a common
++    // word with a phrase's first piece, so they get a small share and only
++    // for starts of start_min_letters or more.
++    float start_fraction = 0.3f;
++    // Starts shorter than this many letters ("co", "sup") are never boosted:
++    // they begin too many ordinary words.
++    int32_t start_min_letters = 3;
++    // A one-letter start ("C" of "Claude") begins far too many words to track
++    // as the start of a phrase, even when the model chose it.
++    int32_t match_min_letters = 2;
++    bool empty() const { return phrases.empty() || score <= 0.0f; }
++};
++
++// A partial match: phrase index and characters matched so far.
++using parakeet_boost_match = std::pair<int32_t, int32_t>;
++
+ struct parakeet_context {
++    parakeet_boost boost;
+     int64_t t_load_us  = 0;
+     int64_t t_start_us = 0;
+ 
+@@ -2516,6 +2545,10 @@ static bool parakeet_decode(
+     // Start with the blank token (8192)
+     parakeet_token last_token = blank_id;
+ 
++    // Partial phrase matches (trie nodes) for phrase boosting.
++    const parakeet_boost & boost = pctx.boost;
++    std::vector<parakeet_boost_match> boost_active;
++
+     PARAKEET_LOG_DEBUG("parakeet_decode: starting decode with n_frames=%d\n", n_frames);
+ 
+     batch.n_tokens  = 1;
+@@ -2563,6 +2596,32 @@ static bool parakeet_decode(
+             }
+         }
+ 
++        if (!boost.empty()) {
++            // Continuing a started phrase may outweigh blank. Starting a new
++            // phrase only competes when a token would be emitted anyway, so the
++            // boost never inserts words into silence.
++            float best_score = max_logit;
++            const auto consider = [&](int32_t token, float bonus) {
++                const float score = pstate.logits[token] + bonus;
++                if (score > best_score) {
++                    best_score = score;
++                    best_token = token;
++                }
++            };
++            for (const auto & match : boost_active) {
++                for (const auto & step : boost.phrases[match.first].steps[match.second]) consider(step.first, boost.score);
++            }
++            if (best_token != blank_id) {
++                for (const auto & phrase : boost.phrases) {
++                    for (const auto & step : phrase.steps[0]) {
++                        // The word-start marker is 3 bytes of UTF-8.
++                        if (step.second - 3 >= boost.start_min_letters) consider(step.first, boost.score * boost.start_fraction);
++                    }
++                }
++            }
++            max_logit = pstate.logits[best_token];
++        }
++
+         // find the max index of the duration logits, and look up that index
+         // value in the tdt_durations array to get the actual duration value.
+         int best_duration_idx = 0;
+@@ -2589,6 +2648,24 @@ static bool parakeet_decode(
+             continue;
+         }
+ 
++        if (!boost.empty()) {
++            std::vector<parakeet_boost_match> advanced;
++            const auto advance = [&](int32_t phrase, int32_t offset) {
++                for (const auto & step : boost.phrases[phrase].steps[offset]) {
++                    if (step.first != best_token) continue;
++                    if (offset == 0 && step.second - 3 < boost.match_min_letters) continue;
++                    const int32_t next = offset + step.second;
++                    // A completed phrase ends its match; longer phrases continue.
++                    if (next < (int32_t) boost.phrases[phrase].steps.size()) advanced.emplace_back(phrase, next);
++                }
++            };
++            for (const auto & match : boost_active) advance(match.first, match.second);
++            for (int32_t phrase = 0; phrase < (int32_t) boost.phrases.size(); ++phrase) advance(phrase, 0);
++            std::sort(advanced.begin(), advanced.end());
++            advanced.erase(std::unique(advanced.begin(), advanced.end()), advanced.end());
++            boost_active = std::move(advanced);
++        }
++
+         // Emit non-blank token at current frame t.
+         pstate.decoded_tokens.push_back(best_token);
+         pstate.t_sample_us += ggml_time_us() - t_start_sample_us;
+@@ -3340,6 +3417,49 @@ int parakeet_tokenize(struct parakeet_context * ctx, const char * text, parakeet
+     return res.size();
+ }
+ 
++static std::string parakeet_ascii_lower(std::string text) {
++    for (auto & c : text) c = (char) std::tolower((unsigned char) c);
++    return text;
++}
++
++int parakeet_set_boost_phrases(struct parakeet_context * ctx, const char ** phrases, int n_phrases, float score) {
++    parakeet_boost boost;
++    boost.score = score;
++    if (const char * fraction = getenv("INLAY_PHRASE_BOOST_START")) boost.start_fraction = strtof(fraction, nullptr);
++    if (const char * letters = getenv("INLAY_PHRASE_BOOST_START_MIN")) boost.start_min_letters = atoi(letters);
++    if (n_phrases <= 0 || score <= 0.0f) {
++        ctx->boost = std::move(boost);
++        return 0;
++    }
++    // Lowercased piece text -> token ids, built once per call.
++    std::unordered_map<std::string, std::vector<int32_t>> pieces;
++    size_t max_length = 0;
++    for (const auto & entry : ctx->vocab.token_to_id) {
++        if (entry.second == ctx->vocab.token_blank || is_sentencepiece_control(entry.first)) continue;
++        pieces[parakeet_ascii_lower(entry.first)].push_back(entry.second);
++        max_length = std::max(max_length, entry.first.size());
++    }
++    for (int i = 0; i < n_phrases; ++i) {
++        if (!phrases[i] || !phrases[i][0]) continue;
++        // The normalizer adds the word-start marker, as for spoken words.
++        const std::string target = parakeet_ascii_lower(sentencepiece_normalize(phrases[i]));
++        parakeet_boost_phrase phrase;
++        phrase.steps.resize(target.size());
++        for (size_t offset = 0; offset < target.size(); ++offset) {
++            for (size_t length = 1; length <= max_length && offset + length <= target.size(); ++length) {
++                const auto it = pieces.find(target.substr(offset, length));
++                if (it == pieces.end()) continue;
++                for (const auto id : it->second) phrase.steps[offset].emplace_back(id, (int32_t) length);
++            }
++        }
++        if (phrase.steps[0].empty()) continue;
++        boost.phrases.push_back(std::move(phrase));
++    }
++    const int added = (int) boost.phrases.size();
++    ctx->boost = std::move(boost);
++    return added;
++}
++
+ int parakeet_token_count(struct parakeet_context * ctx, const char * text) {
+     return -parakeet_tokenize(ctx, text, NULL, 0);
+ }

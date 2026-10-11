@@ -1,6 +1,6 @@
 # Dictionary and cleanup
 
-The server processes each complete take in this order: Parakeet → mechanical cleanup → dictionary → list formatting → optional Qwen → dictionary → rewrite validation → composition. The Mac receives a finished result for insertion. Models and installation are covered in the [server guide](../Server/README.md#models).
+The server processes each complete take in this order: Parakeet (biased toward dictionary terms) → mechanical cleanup → dictionary → list formatting → optional Qwen → dictionary → rewrite validation → composition. The Mac receives a finished result for insertion. Models and installation are covered in the [server guide](../Server/README.md#models).
 
 ## Dictionary and vocabulary
 
@@ -8,8 +8,11 @@ Edit **Server preferences**, then **Save shared preferences**. All dictionary li
 
 - Preferred spellings normalize case. Explicit aliases replace whole words or phrases, such as `mini max → MiniMax`. Longer matches win, and replacements do not cascade.
 - Use narrow aliases like `off middleware → auth middleware`; a broad `off → auth` also changes legitimate “turn off.”
-- Star priority terms to suggest them to Qwen first. Parakeet does not support recognition vocabulary prompts, so the server sends none. Dictionary replacements and Qwen’s bounded hint budget still apply.
-- Saved recognition vocabulary remains in existing settings for compatibility, but Parakeet does not consume it. Use dictionary rules for deterministic replacements and dictionary names for Qwen cleanup.
+- Dictionary terms also bias recognition (phrase boosting). Once Parakeet starts a word that begins a term, pieces that continue it gain a bonus, matched by letters and ignoring case, so `browser base` can become `browserbase`. Starts of at least three letters get a small bonus too, which can turn `grab loop` into `greploop`. Capitalization comes from the dictionary step afterward.
+- Boosting cannot help when Parakeet's first piece already differs from the term (`superbase` for Supabase, `whisper flow` for Wispr Flow). Add those spellings as aliases. A term that begins many ordinary words can occasionally capture one; check raw text in history and remove or rename the term if it does.
+- `INLAY_PHRASE_BOOST` on the server sets the bonus (default 12; 0 disables boosting).
+- Star priority terms to suggest them to Qwen first. Dictionary replacements and Qwen’s bounded hint budget still apply.
+- Saved recognition vocabulary remains in existing settings for compatibility, but Parakeet does not consume it. Use dictionary terms for boosting, dictionary rules for deterministic replacements, and dictionary names for Qwen cleanup.
 - The initial Personal list contains MiniMax and Codex. You can delete them or save an empty dictionary. There is no automatic learning from edits or history.
 
 ## Cleanup instructions
