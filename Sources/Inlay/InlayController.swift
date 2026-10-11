@@ -118,6 +118,14 @@ final class InlayController: ObservableObject {
             if !applyingConfiguration { configuration.update { $0.muteOutputWhileRecording = muteOutputWhileRecording } }
         }
     }
+    @Published var showDetectedLanguage = false {
+        didSet {
+            if !applyingConfiguration { configuration.update { $0.showDetectedLanguage = showDetectedLanguage } }
+            if !showDetectedLanguage { detectedLanguage = nil }
+        }
+    }
+    /// The latest take's language, shown beside the HUD result.
+    @Published private(set) var detectedLanguage: SpokenLanguage?
     @Published var statusMessage = "Connecting to server…"
     @Published private(set) var serverHealth: ServerHealth?
     @Published private(set) var serverStatusMessage = "Connecting…"
@@ -268,6 +276,7 @@ final class InlayController: ObservableObject {
         if let mode = HotkeyActivationMode(rawValue: settings.activationMode), activationMode != mode { activationMode = mode }
         if launchAtLogin != settings.launchAtLogin { launchAtLogin = settings.launchAtLogin }
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
+        if showDetectedLanguage != settings.showDetectedLanguage { showDetectedLanguage = settings.showDetectedLanguage }
         applyingConfiguration = false
     }
 
@@ -864,6 +873,7 @@ final class InlayController: ObservableObject {
         insertionDestination = nil
         recordingInputName = input.name
         recordingFeedback.reset()
+        detectedLanguage = nil
         activity = .starting
         statusMessage = "Connecting recording…"
         onHUDVisibility?(true)
@@ -1094,6 +1104,9 @@ final class InlayController: ObservableObject {
                          anchor: DictationDestination?, isTest: Bool, clipboardCount: Int,
                          session: UUID) async -> DeliveryReceipt {
         var transcript = record.previewText.isEmpty ? record.finalText : record.previewText
+        if sessionID == session {
+            detectedLanguage = showDetectedLanguage ? SpokenLanguage.detect(in: record.finalText) : nil
+        }
         let message: String
         let deliveryStatus: DictationDeliveryStatus
         let status: String

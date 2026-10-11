@@ -98,6 +98,7 @@ struct DictationHUD: View {
     static let height: CGFloat = 44
     static let noticeHeight: CGFloat = 30
     static let morphDuration = 0.18
+    static let badgeGap: CGFloat = 6
     @ObservedObject var controller: InlayController
     @ObservedObject var presentation: DictationHUDPresentation
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -172,6 +173,20 @@ struct DictationHUD: View {
                 DevBadge().offset(x: 10, y: -6).allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .trailing) {
+            if let language = shownLanguage {
+                LanguageBadge(language: language)
+                    // Sit just outside the circle's right edge.
+                    .alignmentGuide(HorizontalAlignment.trailing) { $0[.leading] - Self.badgeGap }
+                    .transition(reduceMotion ? .opacity : .asymmetric(
+                        insertion: .scale(scale: 0.3, anchor: .leading)
+                            .combined(with: .offset(x: -Self.height / 2))
+                            .combined(with: .opacity),
+                        removal: .opacity))
+            }
+        }
+        .animation(reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.3).delay(Self.morphDuration),
+                   value: shownLanguage)
         .scaleEffect(entered ? 1 : 0.25)
         .opacity(entered ? 1 : 0)
         .onExitCommand {
@@ -226,6 +241,12 @@ struct DictationHUD: View {
         }
     }
 
+    /// Expands from the result circle once the capsule has contracted.
+    private var shownLanguage: SpokenLanguage? {
+        guard !expanded, controller.activity == .success || controller.activity == .failed else { return nil }
+        return controller.detectedLanguage
+    }
+
     private var result: DictationDeliveryStatus {
         controller.activity == .failed ? .failed : controller.lastDeliveryStatus
     }
@@ -247,6 +268,27 @@ struct DictationHUD: View {
             if result.needsAttention { controller.onShowWindow?() }
             controller.dismissFeedback()
         }
+    }
+}
+
+struct LanguageBadge: View {
+    let language: SpokenLanguage
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let flag = language.flag { Text(flag).font(.system(size: 13)) }
+            Text(language.abbreviation)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(InlayPalette.ink)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .fixedSize()
+        .modifier(InlayFloatingSurface(cornerRadius: 13))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Detected language: \(language.name)")
+        .accessibilityIdentifier("hud.language")
+        .help(language.name)
     }
 }
 

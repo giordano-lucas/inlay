@@ -234,6 +234,8 @@ private final class DictationPanel: NSPanel {
     private var activity: DictationActivity = .idle
     private var showsNotice = false
     private var compact = false
+    private var showsLanguage = false
+    private var languageSubscription: AnyCancellable?
 
     init(controller: InlayController) {
         let hostingView = NSHostingView(rootView: DictationHUD(controller: controller, presentation: presentation).padding(18))
@@ -264,6 +266,14 @@ private final class DictationPanel: NSPanel {
             .map { $0 != nil }
             .removeDuplicates()
             .sink { [weak self] visible in self?.setNoticeVisible(visible) }
+        languageSubscription = controller.$detectedLanguage
+            .map { $0 != nil }
+            .removeDuplicates()
+            .sink { [weak self] visible in
+                guard let self else { return }
+                showsLanguage = visible
+                updateFrame()
+            }
         activitySubscription = controller.$activity.removeDuplicates().sink { [weak self] activity in
             self?.activity = activity
             self?.updateCompactState()
@@ -282,7 +292,8 @@ private final class DictationPanel: NSPanel {
     }
 
     private func updateFrame() {
-        setFrame(DictationPanelLayout.windowFrame(from: frame, showsNotice: showsNotice, compact: compact), display: false)
+        setFrame(DictationPanelLayout.windowFrame(from: frame, showsNotice: showsNotice, compact: compact && !showsLanguage),
+                 display: false)
         hostedHUD.frame = DictationPanelLayout.contentFrame(in: frame.size)
     }
 
