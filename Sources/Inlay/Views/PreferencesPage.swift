@@ -70,6 +70,17 @@ private struct DevicePreferencesForm: View {
                 }
                 Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
                     .accessibilityIdentifier("preferences.mute-output")
+                Toggle("Play sound effects", isOn: $controller.playSoundEffects)
+                    .accessibilityIdentifier("preferences.sound-effects")
+                if controller.playSoundEffects {
+                    HStack {
+                        Text("Add start, stop, success, alert, or error sound files to replace the built-in sounds.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Show Folder") { controller.revealSoundsFolder() }
+                            .controlSize(.small)
+                    }
+                }
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
                 if let error = controller.loginItemError {
                     Text(error).font(.caption).foregroundStyle(InlayPalette.warning)
