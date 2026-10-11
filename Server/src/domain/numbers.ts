@@ -352,7 +352,11 @@ export function digitizeNumbers(text: string) {
       partOfCompound(tokens, index, end) ||
       (lone && loneEntry.kind === "scale") ||
       (lone && loneEntry.kind === "hundred") ||
-      (lone && first.value < 10 && !cued && !decimal && !(unitAfter && units.has(unitAfter)))
+      (lone && first.value < 10 && !cued && !decimal && !(unitAfter && units.has(unitAfter))) ||
+      // Counting ("testing one two three") reads as words.
+      (numbers.length > 1 &&
+        !cued &&
+        numbers.every((number) => number.words === 1 && number.value < 10))
     ) {
       // Leave the original words.
       for (let i = index; i < end; i++) output.push(tokens[i]!.text);
