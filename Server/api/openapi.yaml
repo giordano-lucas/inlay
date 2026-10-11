@@ -633,6 +633,9 @@ components:
           type: "boolean"
         keepOriginalAudio:
           type: "boolean"
+        numbersAsDigits:
+          type: "boolean"
+          description: "Write spoken English and French numbers as digits in the final text. Absent means false."
       required:
         - "language"
         - "vocabulary"
