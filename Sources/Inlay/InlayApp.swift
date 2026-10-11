@@ -210,7 +210,7 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
 
 enum DictationPanelLayout {
     static var contentSize: NSSize {
-        NSSize(width: DictationHUD.width + 36, height: DictationHUD.height + DictationHUD.noticeHeight + 36)
+        NSSize(width: DictationHUD.containerWidth + 36, height: DictationHUD.height + DictationHUD.noticeHeight + 36)
     }
 
     static func windowFrame(from frame: NSRect, showsNotice: Bool, compact: Bool = false) -> NSRect {

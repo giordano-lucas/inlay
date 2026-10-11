@@ -123,6 +123,14 @@ final class InlayController: ObservableObject {
             if !applyingConfiguration { configuration.update { $0.playSoundEffects = playSoundEffects } }
         }
     }
+    @Published var showDetectedLanguage = false {
+        didSet {
+            if !applyingConfiguration { configuration.update { $0.showDetectedLanguage = showDetectedLanguage } }
+            if !showDetectedLanguage { detectedLanguage = nil }
+        }
+    }
+    /// The language the server hears in the take being recorded.
+    @Published private(set) var detectedLanguage: SpokenLanguage?
     @Published var statusMessage = "Connecting to server…"
     @Published private(set) var serverHealth: ServerHealth?
     @Published private(set) var serverStatusMessage = "Connecting…"
@@ -166,6 +174,8 @@ final class InlayController: ObservableObject {
     private let hotkey = HotkeyMonitor()
     private let outputMuter = SystemOutputMuter()
     let sounds = SoundEffects()
+    private var livePreviewTask: Task<Void, Never>?
+    private var pendingLanguage: SpokenLanguage?
     private var subscriptions: Set<AnyCancellable> = []
     private var applyingConfiguration = false
     private var recordingTimer: Timer?
@@ -275,6 +285,7 @@ final class InlayController: ObservableObject {
         if launchAtLogin != settings.launchAtLogin { launchAtLogin = settings.launchAtLogin }
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
         if playSoundEffects != settings.playSoundEffects { playSoundEffects = settings.playSoundEffects }
+        if showDetectedLanguage != settings.showDetectedLanguage { showDetectedLanguage = settings.showDetectedLanguage }
         applyingConfiguration = false
     }
 
@@ -749,6 +760,7 @@ final class InlayController: ObservableObject {
         uploadPipe?.cancel(); uploadPipe = nil
         uploadTask?.cancel(); uploadTask = nil
         destinationTask?.cancel(); destinationTask = nil
+        livePreviewTask?.cancel(); livePreviewTask = nil
         stopRecordingTimer()
         recorder.cancel()
         outputMuter.restore()
@@ -764,6 +776,24 @@ final class InlayController: ObservableObject {
     @discardableResult
     private func cue(_ sound: DictationSound) -> TimeInterval {
         playSoundEffects ? sounds.play(sound) : 0
+    }
+
+    /// Follows the server's live preview of the take being recorded and shows the
+    /// language it hears. Release, cancellation, or failure stops following.
+    private func watchLivePreview(_ id: UUID, connection: ServerClient, session: UUID) {
+        livePreviewTask?.cancel()
+        livePreviewTask = Task {
+            _ = try? await connection.events(id) { record in
+                guard let text = record.livePreviewText, let language = SpokenLanguage.detect(in: text) else { return }
+                await MainActor.run { [weak self] in
+                    guard let self, sessionID == session, isCapturing, showDetectedLanguage else { return }
+                    // Show the first language at once; switch only when two
+                    // previews in a row agree, so half-heard words do not flicker.
+                    if detectedLanguage == nil || language == pendingLanguage { detectedLanguage = language }
+                    pendingLanguage = language == detectedLanguage ? nil : language
+                }
+            }
+        }
     }
 
     private func failSession(_ message: String, cancelServer: Bool) {
@@ -882,6 +912,8 @@ final class InlayController: ObservableObject {
         insertionDestination = nil
         recordingInputName = input.name
         recordingFeedback.reset()
+        detectedLanguage = nil
+        pendingLanguage = nil
         activity = .starting
         statusMessage = "Connecting recording…"
         onHUDVisibility?(true)
@@ -919,6 +951,7 @@ final class InlayController: ObservableObject {
                 guard created.status == .receiving else { throw ServerClientError.invalidResponse }
                 activeGenerationID = created.id
                 activeClient = connection
+                if showDetectedLanguage { watchLivePreview(created.id, connection: connection, session: current) }
                 sharedPreferences = created.settings
                 let pipe = AudioChunkPipe { [weak self] error in
                     Task { @MainActor [weak self] in
@@ -970,6 +1003,7 @@ final class InlayController: ObservableObject {
         hotkey.clearLatchedTake()
         recorder.stopAcceptingAudio()
         outputMuter.restore()
+        livePreviewTask?.cancel(); livePreviewTask = nil
         guard activity == .recording else { cancelDictation(); return }
         let releasedAt = ProcessInfo.processInfo.systemUptime
         destinationTask?.finish()

@@ -81,6 +81,9 @@ private struct DevicePreferencesForm: View {
                             .controlSize(.small)
                     }
                 }
+                Toggle("Show language while recording", isOn: $controller.showDetectedLanguage)
+                    .help("Shows the language the speech model hears in the recording capsule. Off skips the live recognition entirely.")
+                    .accessibilityIdentifier("preferences.detected-language")
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
                 if let error = controller.loginItemError {
                     Text(error).font(.caption).foregroundStyle(InlayPalette.warning)

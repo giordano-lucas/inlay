@@ -1885,6 +1885,10 @@ extension Components {
             public var previewText: Swift.String
             /// - Remark: Generated from `#/components/schemas/GenerationRecord/detectedLanguage`.
             public var detectedLanguage: Swift.String?
+            /// Recognized words from the latest seconds of a take that is still receiving audio. Not stored.
+            ///
+            /// - Remark: Generated from `#/components/schemas/GenerationRecord/livePreviewText`.
+            public var livePreviewText: Swift.String?
             /// - Remark: Generated from `#/components/schemas/GenerationRecord/speech`.
             public var speech: Components.Schemas.ModelProvenance?
             /// - Remark: Generated from `#/components/schemas/GenerationRecord/proofreading`.
@@ -1928,6 +1932,7 @@ extension Components {
             ///   - insertionText:
             ///   - previewText:
             ///   - detectedLanguage:
+            ///   - livePreviewText: Recognized words from the latest seconds of a take that is still receiving audio. Not stored.
             ///   - speech:
             ///   - proofreading:
             ///   - textProcessing:
@@ -1957,6 +1962,7 @@ extension Components {
                 insertionText: Swift.String,
                 previewText: Swift.String,
                 detectedLanguage: Swift.String? = nil,
+                livePreviewText: Swift.String? = nil,
                 speech: Components.Schemas.ModelProvenance? = nil,
                 proofreading: Components.Schemas.ModelProvenance? = nil,
                 textProcessing: Components.Schemas.TextProcessingRecord? = nil,
@@ -1986,6 +1992,7 @@ extension Components {
                 self.insertionText = insertionText
                 self.previewText = previewText
                 self.detectedLanguage = detectedLanguage
+                self.livePreviewText = livePreviewText
                 self.speech = speech
                 self.proofreading = proofreading
                 self.textProcessing = textProcessing
@@ -2016,6 +2023,7 @@ extension Components {
                 case insertionText
                 case previewText
                 case detectedLanguage
+                case livePreviewText
                 case speech
                 case proofreading
                 case textProcessing
@@ -2095,6 +2103,10 @@ extension Components {
                     Swift.String.self,
                     forKey: .detectedLanguage
                 )
+                self.livePreviewText = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .livePreviewText
+                )
                 self.speech = try container.decodeIfPresent(
                     Components.Schemas.ModelProvenance.self,
                     forKey: .speech
@@ -2160,6 +2172,7 @@ extension Components {
                     "insertionText",
                     "previewText",
                     "detectedLanguage",
+                    "livePreviewText",
                     "speech",
                     "proofreading",
                     "textProcessing",

@@ -9,12 +9,13 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
     public var launchAtLogin: Bool
     public var muteOutputWhileRecording: Bool
     public var playSoundEffects: Bool
+    public var showDetectedLanguage: Bool
     public var microphones: MicrophonePreferences
 
     public static let `default` = InlayConfiguration()
 
     public init(holdKey: String = "rightOption", activationMode: String = "hold", launchAtLogin: Bool = false,
-                muteOutputWhileRecording: Bool = false, playSoundEffects: Bool = false,
+                muteOutputWhileRecording: Bool = false, playSoundEffects: Bool = false, showDetectedLanguage: Bool = false,
                 microphones: MicrophonePreferences = MicrophonePreferences()) {
         schemaVersion = 1
         self.holdKey = holdKey
@@ -22,11 +23,13 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
         self.launchAtLogin = launchAtLogin
         self.muteOutputWhileRecording = muteOutputWhileRecording
         self.playSoundEffects = playSoundEffects
+        self.showDetectedLanguage = showDetectedLanguage
         self.microphones = microphones
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording, playSoundEffects, microphones
+        case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording, playSoundEffects,
+             showDetectedLanguage, microphones
     }
 
     public init(from decoder: Decoder) throws {
@@ -48,6 +51,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
                   launchAtLogin: try values.value(Bool.self, for: .launchAtLogin, default: false),
                   muteOutputWhileRecording: try values.value(Bool.self, for: .muteOutputWhileRecording, default: false),
                   playSoundEffects: try values.value(Bool.self, for: .playSoundEffects, default: false),
+                  showDetectedLanguage: try values.value(Bool.self, for: .showDetectedLanguage, default: false),
                   microphones: values.contains(.microphones)
                     ? try values.decode(StrictMicrophones.self, forKey: .microphones).preferences
                     : MicrophonePreferences())

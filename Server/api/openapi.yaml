@@ -1159,6 +1159,9 @@ components:
           type: "string"
         detectedLanguage:
           type: "string"
+        livePreviewText:
+          type: "string"
+          description: "Recognized words from the latest seconds of a take that is still receiving audio. Not stored."
         speech:
           "$ref": "#/components/schemas/ModelProvenance"
         proofreading:
