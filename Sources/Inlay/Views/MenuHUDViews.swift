@@ -98,9 +98,10 @@ struct DictationHUD: View {
     static let height: CGFloat = 44
     static let noticeHeight: CGFloat = 30
     static let morphDuration = 0.18
-    /// Extra capsule width while a live language badge shows.
-    static let languageWidth: CGFloat = 50
-    static let containerWidth: CGFloat = width + languageWidth
+    /// Extra capsule width on the left while the live language shows.
+    static let languageWidth: CGFloat = 56
+    /// Room for that growth on the left while the capsule stays centered.
+    static let containerWidth: CGFloat = width + 2 * languageWidth
     @ObservedObject var controller: InlayController
     @ObservedObject var presentation: DictationHUDPresentation
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -109,11 +110,13 @@ struct DictationHUD: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // The capsule grows to the right for the language badge; its left
-            // edge and the contracted circle stay where they were.
+            // The capsule grows only to the left for the language. Its right
+            // edge, its controls, and the contracted circle never move.
             capsule
-                .padding(.leading, expanded ? Self.languageWidth / 2 : (Self.containerWidth - Self.height) / 2)
+                .padding(.leading, capsuleLeadingInset)
                 .frame(width: Self.containerWidth, height: Self.height, alignment: .leading)
+                // Width and inset share one spring so the right edge stays put.
+                .animation(reduceMotion ? nil : .spring(duration: 0.35, bounce: 0.2), value: liveLanguage)
             RecordingLimitNote(feedback: controller.recordingFeedback)
                 .frame(width: Self.containerWidth, height: Self.noticeHeight)
         }
@@ -153,7 +156,7 @@ struct DictationHUD: View {
     private var capsule: some View {
         ZStack {
             expandedContent
-                .frame(width: capsuleWidth, height: Self.height)
+                .frame(width: capsuleWidth, height: Self.height, alignment: .trailing)
                 .opacity(expanded ? 1 : 0)
                 .allowsHitTesting(expanded)
                 .accessibilityHidden(!expanded)
@@ -178,7 +181,6 @@ struct DictationHUD: View {
                 DevBadge().offset(x: 10, y: -6).allowsHitTesting(false)
             }
         }
-        .animation(reduceMotion ? nil : .spring(duration: 0.35, bounce: 0.25), value: liveLanguage)
         .scaleEffect(entered ? 1 : 0.25)
         .opacity(entered ? 1 : 0)
         .onExitCommand {
@@ -193,6 +195,18 @@ struct DictationHUD: View {
     }
 
     private var expandedContent: some View {
+        HStack(spacing: 0) {
+            if let language = liveLanguage {
+                LiveLanguageLabel(language: language, reduceMotion: reduceMotion)
+                    .frame(width: Self.languageWidth, height: Self.height)
+                    .transition(.opacity)
+            }
+            recordingControls
+                .frame(width: Self.width, height: Self.height)
+        }
+    }
+
+    private var recordingControls: some View {
         HStack(spacing: 10) {
             DevBadge()
             HStack(spacing: 8) {
@@ -206,11 +220,6 @@ struct DictationHUD: View {
             }
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(InlayPalette.muted)
-            if let language = liveLanguage {
-                LanguageBadge(language: language)
-                    .id(language.code)
-                    .transition(reduceMotion ? .opacity : .scale(scale: 0.4, anchor: .leading).combined(with: .opacity))
-            }
             Button { controller.cancelDictation() } label: {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
                     .frame(width: 22, height: 28)
@@ -245,6 +254,11 @@ struct DictationHUD: View {
 
     private var capsuleWidth: CGFloat { Self.width + (liveLanguage == nil ? 0 : Self.languageWidth) }
 
+    private var capsuleLeadingInset: CGFloat {
+        guard expanded else { return (Self.containerWidth - Self.height) / 2 }
+        return liveLanguage == nil ? Self.languageWidth : 0
+    }
+
     private var result: DictationDeliveryStatus {
         controller.activity == .failed ? .failed : controller.lastDeliveryStatus
     }
@@ -269,20 +283,28 @@ struct DictationHUD: View {
     }
 }
 
-struct LanguageBadge: View {
+/// The live language, set into the capsule like its timer: flag, code, divider.
+struct LiveLanguageLabel: View {
     let language: SpokenLanguage
+    let reduceMotion: Bool
 
     var body: some View {
         HStack(spacing: 4) {
-            if let flag = language.flag { Text(flag).font(.system(size: 13)) }
-            Text(language.abbreviation)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(InlayPalette.ink)
+            HStack(spacing: 4) {
+                if let flag = language.flag { Text(flag).font(.system(size: 12)) }
+                Text(language.abbreviation)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(InlayPalette.muted)
+            }
+            .id(language.code)
+            .transition(reduceMotion ? .opacity : .push(from: .bottom))
+            Spacer(minLength: 0)
+            Rectangle()
+                .fill(InlayPalette.muted.opacity(0.3))
+                .frame(width: 1, height: 16)
         }
-        .padding(.horizontal, 7)
-        .frame(height: 22)
-        .fixedSize()
-        .background(InlayPalette.ink.opacity(0.1), in: Capsule())
+        .padding(.leading, 14)
+        .clipped()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Detected language: \(language.name)")
         .accessibilityIdentifier("hud.language")
