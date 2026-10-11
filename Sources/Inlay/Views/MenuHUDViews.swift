@@ -99,7 +99,7 @@ struct DictationHUD: View {
     static let noticeHeight: CGFloat = 30
     static let morphDuration = 0.18
     /// Extra capsule width on the left while the live language shows.
-    static let languageWidth: CGFloat = 56
+    static let languageWidth: CGFloat = 62
     /// Room for that growth on the left while the capsule stays centered.
     static let containerWidth: CGFloat = width + 2 * languageWidth
     @ObservedObject var controller: InlayController
@@ -296,6 +296,8 @@ struct LiveLanguageLabel: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(InlayPalette.muted)
             }
+            .lineLimit(1)
+            .fixedSize()
             .id(language.code)
             .transition(reduceMotion ? .opacity : .push(from: .bottom))
             Spacer(minLength: 0)
