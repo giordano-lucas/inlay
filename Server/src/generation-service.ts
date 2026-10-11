@@ -1238,10 +1238,13 @@ export class GenerationService {
   /**
    * Recognize the newest seconds of a recording with the same speech model, so
    * a client can show what is being heard before release. Runs one at a time,
-   * only while no sealed take is processing, and never cancels the helper.
+   * only while a client follows the take and no sealed take is processing, and
+   * never cancels the helper.
    */
   private scheduleLivePreview(id: string, upload: Upload) {
     if (this.livePreviewRunning || this.processingControllers.size || this.stopping) return;
+    // Only recognize while a client follows this take; nobody else reads it.
+    if (!this.subscribers.get(id)?.size) return;
     const { sampleRate, channels } = upload.format;
     if (sampleRate !== 16_000 || channels !== 1) return;
     const frames = upload.bytes / 4;

@@ -70,7 +70,8 @@ private struct DevicePreferencesForm: View {
                 }
                 Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
                     .accessibilityIdentifier("preferences.mute-output")
-                Toggle("Show detected language", isOn: $controller.showDetectedLanguage)
+                Toggle("Show language while recording", isOn: $controller.showDetectedLanguage)
+                    .help("Shows the language the speech model hears in the recording capsule. Off skips the live recognition entirely.")
                     .accessibilityIdentifier("preferences.detected-language")
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
                 if let error = controller.loginItemError {
