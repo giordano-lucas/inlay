@@ -70,6 +70,17 @@ private struct DevicePreferencesForm: View {
                 }
                 Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
                     .accessibilityIdentifier("preferences.mute-output")
+                Toggle("Play sound effects", isOn: $controller.playSoundEffects)
+                    .accessibilityIdentifier("preferences.sound-effects")
+                if controller.playSoundEffects {
+                    HStack {
+                        Text("Add start, stop, success, alert, or error sound files to replace the built-in sounds.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Show Folder") { controller.revealSoundsFolder() }
+                            .controlSize(.small)
+                    }
+                }
                 Toggle("Show language while recording", isOn: $controller.showDetectedLanguage)
                     .help("Shows the language the speech model hears in the recording capsule. Off skips the live recognition entirely.")
                     .accessibilityIdentifier("preferences.detected-language")

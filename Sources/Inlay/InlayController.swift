@@ -118,6 +118,11 @@ final class InlayController: ObservableObject {
             if !applyingConfiguration { configuration.update { $0.muteOutputWhileRecording = muteOutputWhileRecording } }
         }
     }
+    @Published var playSoundEffects = false {
+        didSet {
+            if !applyingConfiguration { configuration.update { $0.playSoundEffects = playSoundEffects } }
+        }
+    }
     @Published var showDetectedLanguage = false {
         didSet {
             if !applyingConfiguration { configuration.update { $0.showDetectedLanguage = showDetectedLanguage } }
@@ -168,6 +173,7 @@ final class InlayController: ObservableObject {
     private let serverClientFactory: (() throws -> ServerClient)?
     private let hotkey = HotkeyMonitor()
     private let outputMuter = SystemOutputMuter()
+    let sounds = SoundEffects()
     private var livePreviewTask: Task<Void, Never>?
     private var pendingLanguage: SpokenLanguage?
     private var subscriptions: Set<AnyCancellable> = []
@@ -278,6 +284,7 @@ final class InlayController: ObservableObject {
         if let mode = HotkeyActivationMode(rawValue: settings.activationMode), activationMode != mode { activationMode = mode }
         if launchAtLogin != settings.launchAtLogin { launchAtLogin = settings.launchAtLogin }
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
+        if playSoundEffects != settings.playSoundEffects { playSoundEffects = settings.playSoundEffects }
         if showDetectedLanguage != settings.showDetectedLanguage { showDetectedLanguage = settings.showDetectedLanguage }
         applyingConfiguration = false
     }
@@ -766,6 +773,11 @@ final class InlayController: ObservableObject {
         recordingFeedback.reset()
     }
 
+    @discardableResult
+    private func cue(_ sound: DictationSound) -> TimeInterval {
+        playSoundEffects ? sounds.play(sound) : 0
+    }
+
     /// Follows the server's live preview of the take being recorded and shows the
     /// language it hears. Release, cancellation, or failure stops following.
     private func watchLivePreview(_ id: UUID, connection: ServerClient, session: UUID) {
@@ -789,8 +801,14 @@ final class InlayController: ObservableObject {
         let connection = activeClient
         resetSession()
         showError(message)
+        cue(.error)
         if cancelServer, let generation, let connection { Task { try? await connection.cancel(generation) } }
         refreshHistory()
+    }
+
+    func revealSoundsFolder() {
+        try? FileManager.default.createDirectory(at: sounds.directory, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([sounds.directory])
     }
 
     func copyLastTranscript() {
@@ -899,7 +917,17 @@ final class InlayController: ObservableObject {
         activity = .starting
         statusMessage = "Connecting recording…"
         onHUDVisibility?(true)
-        if muteOutputWhileRecording { outputMuter.mute() }
+        let startCue = cue(.start)
+        if muteOutputWhileRecording {
+            if startCue == 0 { outputMuter.mute() } else {
+                // Let the start cue finish before silencing the output.
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(startCue))
+                    guard let self, sessionID == current, isCapturing else { return }
+                    outputMuter.mute()
+                }
+            }
+        }
         if !isTest {
             let capture = TextInserter.beginDestinationCapture()
             destinationTask = capture
@@ -980,6 +1008,7 @@ final class InlayController: ObservableObject {
         let releasedAt = ProcessInfo.processInfo.systemUptime
         destinationTask?.finish()
         guard releasedAt - recordingStart >= 0.25 else { cancelDictation(); return }
+        cue(.stop)
         guard let id = activeGenerationID, let connection = activeClient, let uploadTask, let uploadPipe else {
             failSession("This recording has no server session.", cancelServer: true); return
         }
@@ -1165,14 +1194,18 @@ final class InlayController: ObservableObject {
                     rememberContinuation(record, at: .field(target))
                 }
                 message = "Inserted at your cursor"; deliveryStatus = .inserted; status = "Inserted"
+                cue(.success)
             case .copied(let reason):
                 transcript = record.finalText; message = reason; deliveryStatus = .copied; status = "Copied"
+                cue(.alert)
             case .unconfirmed(let backup):
                 transcript = record.finalText
                 message = backup ? "Insertion unconfirmed. Copied to clipboard if needed." : "Insertion unconfirmed. Your words are here to copy."
                 deliveryStatus = .unconfirmed; status = "Check insertion"
+                cue(.alert)
             case .failed(let reason):
                 transcript = record.finalText; message = reason; deliveryStatus = .failed; status = "Ready to copy"
+                cue(.error)
             }
         }
         lastTranscript = transcript
