@@ -158,7 +158,9 @@ final class TextInserter {
         let initialActivation = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let cutoff = InsertionCaptureCutoff()
         let task = Task<InsertionDestination, Never> { @MainActor in
-            let snapshot = await readOffMain { await readPreparedDestinationSnapshot(cutoff: cutoff) }
+            let snapshot = await readOffMain {
+                await readPreparedDestinationSnapshot(cutoff: cutoff, frontmost: initialActivation)
+            }
             guard !Task.isCancelled else {
                 return .blocked(reason: "Dictation was cancelled. Nothing was pasted or copied.")
             }
@@ -389,14 +391,20 @@ final class TextInserter {
         return .valid(selection: selectedRange(of: latest.element))
     }
 
-    private nonisolated static func readPreparedDestinationSnapshot(cutoff: InsertionCaptureCutoff) async -> InsertionDestinationSnapshot {
+    private nonisolated static func readPreparedDestinationSnapshot(cutoff: InsertionCaptureCutoff,
+                                                                    frontmost: pid_t?) async -> InsertionDestinationSnapshot {
         guard !Task.isCancelled, AXIsProcessTrusted() else {
             return .blocked(reason: "Allow Accessibility access to check the destination safely. Nothing was pasted or copied.")
         }
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, 0.2)
         let appRead = elementAttribute(kAXFocusedApplicationAttribute as CFString, of: system)
-        guard let application = appRead.element else {
+        // A Chromium browser reports no focused application until its web
+        // accessibility is on. The frontmost app owns the keyboard; prepare it.
+        let frontmostApplication = appRead.absent
+            ? frontmost.flatMap { $0 == ProcessInfo.processInfo.processIdentifier ? nil : AXUIElementCreateApplication($0) }
+            : nil
+        guard let application = appRead.element ?? frontmostApplication else {
             // Keep the ordinary paired app/field check: an absent application
             // does not make a present field with unknown ownership safe to copy.
             return appRead.absent ? readDestinationSnapshot() : .blocked(reason: "The focused application could not be checked safely. Nothing was pasted or copied.")
@@ -494,15 +502,42 @@ final class TextInserter {
         guard !Task.isCancelled, AXIsProcessTrusted(), applicationIsFocused(application) else {
             return .blocked(reason: "Focus or Accessibility access changed while preparing dictation. Nothing was pasted or copied.")
         }
-        return InsertionAccessibilityPolicy.afterWrite(write)
+        let activation = InsertionAccessibilityPolicy.afterWrite(write)
+        guard activation == .unsupported, usesChromium(app) else { return activation }
+        // Chromium browsers ignore Electron's attribute and turn their web tree
+        // on for the one VoiceOver sets, even when the write reports otherwise.
+        let enhanced = AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        guard !Task.isCancelled, AXIsProcessTrusted(), applicationIsFocused(application) else {
+            return .blocked(reason: "Focus or Accessibility access changed while preparing dictation. Nothing was pasted or copied.")
+        }
+        return InsertionAccessibilityPolicy.afterChromiumWrite(enhanced)
+    }
+
+    /// Chromium browsers and Electron apps ship a renderer helper; only they
+    /// get the VoiceOver attribute, which changes behavior in native apps.
+    private nonisolated static func usesChromium(_ application: AXUIElement) -> Bool {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(application, &pid) == .success,
+              let bundle = NSRunningApplication(processIdentifier: pid)?.bundleURL else { return false }
+        let frameworks = bundle.appendingPathComponent("Contents/Frameworks", isDirectory: true)
+        let hasRenderer = { (directory: URL) in
+            ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
+                .contains { $0.hasSuffix("Renderer).app") }
+        }
+        if hasRenderer(frameworks) { return true }
+        return ((try? FileManager.default.contentsOfDirectory(atPath: frameworks.path)) ?? []).contains {
+            $0.hasSuffix(".framework") &&
+                hasRenderer(frameworks.appendingPathComponent("\($0)/Versions/Current/Helpers", isDirectory: true))
+        }
     }
 
     private nonisolated static func applicationIsFocused(_ expected: FocusedApplicationSnapshot) -> Bool {
         guard !Task.isCancelled else { return false }
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, 0.2)
-        guard let current = elementAttribute(kAXFocusedApplicationAttribute as CFString, of: system).element,
-              CFEqual(current, expected.element) else { return false }
+        let read = elementAttribute(kAXFocusedApplicationAttribute as CFString, of: system)
+        if read.absent { return isActive(expected) }
+        guard let current = read.element, CFEqual(current, expected.element) else { return false }
         if let window = expected.window {
             let currentWindow = elementAttribute(kAXFocusedWindowAttribute as CFString, of: expected.element).element
             guard let currentWindow, CFEqual(window, currentWindow) else { return false }
@@ -512,6 +547,13 @@ final class TextInserter {
 
     /// This is the system's focused object, not an application's remembered
     /// responder. Keep application and element PIDs distinct for remote web AX.
+    /// Without a system focus, the expected application must still be frontmost.
+    private nonisolated static func isActive(_ expected: FocusedApplicationSnapshot) -> Bool {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(expected.element, &pid) == .success else { return false }
+        return NSRunningApplication(processIdentifier: pid)?.isActive == true
+    }
+
     private nonisolated static func readFocusedElement(expectedApplication: FocusedApplicationSnapshot? = nil) -> FocusedElementRead {
         guard !Task.isCancelled else { return .unverified }
         let system = AXUIElementCreateSystemWide()
@@ -523,6 +565,8 @@ final class TextInserter {
         guard appRead.element != nil || appRead.absent,
               fieldRead.element != nil || fieldRead.absent else { return .unverified }
         if let expectedApplication {
+            // A frontmost Chromium browser exposes no focus until its tree is on.
+            if appRead.absent, fieldRead.absent, isActive(expectedApplication) { return .absent }
             guard let app = appRead.element, CFEqual(app, expectedApplication.element),
                   applicationIsFocused(expectedApplication) else { return .unverified }
         }

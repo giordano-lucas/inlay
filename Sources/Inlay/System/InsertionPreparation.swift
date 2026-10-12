@@ -34,6 +34,16 @@ enum InsertionAccessibilityPolicy {
         }
     }
 
+    /// Chromium applies the VoiceOver attribute even when it reports the write
+    /// as unimplemented; the bounded readiness poll decides whether it worked.
+    static func afterChromiumWrite(_ result: AXError) -> InsertionAccessibilityActivation {
+        switch result {
+        case .success, .notImplemented, .attributeUnsupported: return .supported
+        case .apiDisabled: return .blocked(reason: accessUnavailable)
+        default: return .unavailable
+        }
+    }
+
     static func afterWrite(_ result: AXError) -> InsertionAccessibilityActivation {
         switch result {
         case .success: return .supported
@@ -55,7 +65,8 @@ struct InsertionPreparationEnvironment<Value: Sendable>: Sendable {
 /// Accessibility mode can precede the renderer's usable tree. Request it once,
 /// then read focus without resetting Electron's two-second activation debounce.
 enum InsertionPreparation {
-    static let readinessSeconds: TimeInterval = 3
+    // Electron and Chromium can take a few seconds to build a fresh tree.
+    static let readinessSeconds: TimeInterval = 6
     static let pollingSeconds: TimeInterval = 0.1
     static let cancelled = "Dictation was cancelled. Nothing was pasted or copied."
 
