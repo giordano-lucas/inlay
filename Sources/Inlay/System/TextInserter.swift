@@ -45,6 +45,8 @@ fileprivate struct FocusedFieldSnapshot: @unchecked Sendable {
     let applicationPID: pid_t
     let elementPID: pid_t
     let element: AXUIElement
+    /// A Chromium page with nothing editable focused, which only a paste reaches.
+    var isPage = false
 
     func isSameField(as other: Self) -> Bool {
         applicationPID == other.applicationPID && elementPID == other.elementPID &&
@@ -175,7 +177,7 @@ final class TextInserter {
 
     /// The focused field now, read off the main actor; protected fields stay blocked.
     static func currentDestination() async -> InsertionDestination {
-        destination(from: await readOffMain { readDestinationSnapshot() })
+        destination(from: await readOffMain { readDestinationSnapshot(allowsPage: true) })
     }
 
     /// Text that followed the cursor to another field is the take on its own;
@@ -286,6 +288,10 @@ final class TextInserter {
     private func confirm(_ text: String, in target: InsertionTarget) async -> DeliveryConfirmation {
         guard !target.application.isTerminated else { return .unavailable }
         let expected = target.snapshot
+        if expected.focus.isPage {
+            let pid = expected.focus.applicationPID
+            return await Self.readOffMain { Self.focusedFieldContains(text, in: pid) } ? .confirmed : .pending
+        }
         let probe = await Self.readOffMain { Self.probeField(expected.focus) }
         guard !Task.isCancelled else { return .blocked }
         switch probe {
@@ -394,7 +400,8 @@ final class TextInserter {
         switch fieldEligibility(of: focused.element) {
         case .editable: break
         case .protected: return .blocked(reason: "This field is protected.")
-        case .notEditable: return .changed(reason: "The field is no longer editable.")
+        case .notEditable:
+            guard expected.isPage else { return .changed(reason: "The field is no longer editable.") }
         case .unverified, nil: return .blocked(reason: "The field's safety could not be verified.")
         }
         guard focused.isSameField(as: expected) else { return .changed(reason: "Focus changed.") }
@@ -474,7 +481,8 @@ final class TextInserter {
         }
     }
 
-    private nonisolated static func readDestinationSnapshot(expectedApplication: FocusedApplicationSnapshot? = nil) -> InsertionDestinationSnapshot {
+    private nonisolated static func readDestinationSnapshot(expectedApplication: FocusedApplicationSnapshot? = nil,
+                                                            allowsPage: Bool = false) -> InsertionDestinationSnapshot {
         guard !Task.isCancelled, AXIsProcessTrusted() else {
             return .blocked(reason: "Allow Accessibility access to check the destination safely. Nothing was pasted or copied.")
         }
@@ -502,7 +510,16 @@ final class TextInserter {
         if let expectedApplication, !applicationIsFocused(expectedApplication) {
             return .blocked(reason: "Focus changed while preparing dictation. Nothing was pasted or copied.")
         }
-        if eligibility == .notEditable { return .clipboard }
+        if eligibility == .notEditable {
+            // Chat apps route a paste on a page with nothing focused to their
+            // composer (T3 Code blurs it on a click into the timeline). Only
+            // cursor-following delivery targets the page, and only by pasting.
+            guard allowsPage, isChromiumPage(focused) else { return .clipboard }
+            var page = focused
+            page.isPage = true
+            return .field(InsertionFieldSnapshot(focus: page, selection: nil, capturedAt: capturedAt,
+                                                strategy: .keyboardPaste, pasteCommand: nil))
+        }
         return .field(InsertionFieldSnapshot(focus: focused, selection: selection, capturedAt: capturedAt,
                                             strategy: .keyboardPaste, pasteCommand: nil))
     }
@@ -537,6 +554,24 @@ final class TextInserter {
             return .blocked(reason: "Focus or Accessibility access changed while preparing dictation. Nothing was pasted or copied.")
         }
         return InsertionAccessibilityPolicy.afterChromiumWrite(enhanced)
+    }
+
+    private nonisolated static func isChromiumPage(_ focused: FocusedFieldSnapshot) -> Bool {
+        var role: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(focused.element, kAXRoleAttribute as CFString, &role) == .success,
+              role as? String == "AXWebArea" else { return false }
+        return usesChromium(AXUIElementCreateApplication(focused.applicationPID))
+    }
+
+    /// A paste routed by the page lands in a field that now has focus.
+    private nonisolated static func focusedFieldContains(_ text: String, in pid: pid_t) -> Bool {
+        guard case .found(let focused) = readFocusedElement(), focused.applicationPID == pid,
+              fieldEligibility(of: focused.element) == .editable else { return false }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(focused.element, kAXValueAttribute as CFString, &value) == .success,
+              let current = value as? String else { return false }
+        let inserted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !inserted.isEmpty && current.contains(inserted)
     }
 
     /// Chromium browsers and Electron apps ship a renderer helper; only they
