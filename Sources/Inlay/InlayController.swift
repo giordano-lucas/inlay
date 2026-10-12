@@ -1169,7 +1169,12 @@ final class InlayController: ObservableObject {
             // continuation were composed for the original cursor, so text
             // delivered elsewhere is the take on its own.
             destination = await TextInserter.currentDestination()
-            if destination != captured { insertionText = record.finalText }
+            if destination != captured {
+                insertionText = record.finalText
+                if let target = destination.target {
+                    insertionText = await TextInserter.spaced(insertionText, before: target)
+                }
+            }
         }
         var transcript = record.previewText.isEmpty ? record.finalText : record.previewText
         let message: String

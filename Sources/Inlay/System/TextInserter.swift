@@ -178,6 +178,25 @@ final class TextInserter {
         destination(from: await readOffMain { readDestinationSnapshot() })
     }
 
+    /// Text that followed the cursor to another field is the take on its own;
+    /// separate it from a word that ends right before the cursor there.
+    static func spaced(_ text: String, before target: InsertionTarget) async -> String {
+        guard let selection = target.selection, selection.location > 0,
+              let first = text.first, first.isLetter || first.isNumber else { return text }
+        let focus = target.snapshot.focus
+        let previous = await readOffMain { () -> String? in
+            var range = CFRange(location: selection.location - 1, length: 1)
+            guard let parameter = AXValueCreate(.cfRange, &range) else { return nil }
+            var value: CFTypeRef?
+            guard AXUIElementCopyParameterizedAttributeValue(
+                focus.element, kAXStringForRangeParameterizedAttribute as CFString, parameter, &value) == .success
+            else { return nil }
+            return value as? String
+        }
+        guard let character = previous?.last, !character.isWhitespace, !"([{\"'“‘/".contains(character) else { return text }
+        return " " + text
+    }
+
     static func captureDestination() -> InsertionDestination {
         destination(from: readDestinationSnapshot())
     }
