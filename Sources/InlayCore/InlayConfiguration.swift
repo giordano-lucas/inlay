@@ -10,13 +10,15 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
     public var muteOutputWhileRecording: Bool
     public var playSoundEffects: Bool
     public var showDetectedLanguage: Bool
+    /// Deliver where the cursor is when the text is ready, not where the take began.
+    public var pasteAtCurrentCursor: Bool
     public var microphones: MicrophonePreferences
 
     public static let `default` = InlayConfiguration()
 
     public init(holdKey: String = "rightOption", activationMode: String = "hold", launchAtLogin: Bool = false,
                 muteOutputWhileRecording: Bool = false, playSoundEffects: Bool = false, showDetectedLanguage: Bool = false,
-                microphones: MicrophonePreferences = MicrophonePreferences()) {
+                pasteAtCurrentCursor: Bool = false, microphones: MicrophonePreferences = MicrophonePreferences()) {
         schemaVersion = 1
         self.holdKey = holdKey
         self.activationMode = activationMode
@@ -24,12 +26,13 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
         self.muteOutputWhileRecording = muteOutputWhileRecording
         self.playSoundEffects = playSoundEffects
         self.showDetectedLanguage = showDetectedLanguage
+        self.pasteAtCurrentCursor = pasteAtCurrentCursor
         self.microphones = microphones
     }
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording, playSoundEffects,
-             showDetectedLanguage, microphones
+             showDetectedLanguage, pasteAtCurrentCursor, microphones
     }
 
     public init(from decoder: Decoder) throws {
@@ -52,6 +55,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
                   muteOutputWhileRecording: try values.value(Bool.self, for: .muteOutputWhileRecording, default: false),
                   playSoundEffects: try values.value(Bool.self, for: .playSoundEffects, default: false),
                   showDetectedLanguage: try values.value(Bool.self, for: .showDetectedLanguage, default: false),
+                  pasteAtCurrentCursor: try values.value(Bool.self, for: .pasteAtCurrentCursor, default: false),
                   microphones: values.contains(.microphones)
                     ? try values.decode(StrictMicrophones.self, forKey: .microphones).preferences
                     : MicrophonePreferences())

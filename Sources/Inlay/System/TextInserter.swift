@@ -173,6 +173,11 @@ final class TextInserter {
         return InsertionDestinationCapture(task: task, cutoff: cutoff)
     }
 
+    /// The focused field now, read off the main actor; protected fields stay blocked.
+    static func currentDestination() async -> InsertionDestination {
+        destination(from: await readOffMain { readDestinationSnapshot() })
+    }
+
     static func captureDestination() -> InsertionDestination {
         destination(from: readDestinationSnapshot())
     }

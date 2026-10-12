@@ -123,6 +123,11 @@ final class InlayController: ObservableObject {
             if !applyingConfiguration { configuration.update { $0.playSoundEffects = playSoundEffects } }
         }
     }
+    @Published var pasteAtCurrentCursor = false {
+        didSet {
+            if !applyingConfiguration { configuration.update { $0.pasteAtCurrentCursor = pasteAtCurrentCursor } }
+        }
+    }
     @Published var showDetectedLanguage = false {
         didSet {
             if !applyingConfiguration { configuration.update { $0.showDetectedLanguage = showDetectedLanguage } }
@@ -286,6 +291,7 @@ final class InlayController: ObservableObject {
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
         if playSoundEffects != settings.playSoundEffects { playSoundEffects = settings.playSoundEffects }
         if showDetectedLanguage != settings.showDetectedLanguage { showDetectedLanguage = settings.showDetectedLanguage }
+        if pasteAtCurrentCursor != settings.pasteAtCurrentCursor { pasteAtCurrentCursor = settings.pasteAtCurrentCursor }
         applyingConfiguration = false
     }
 
@@ -1153,9 +1159,18 @@ final class InlayController: ObservableObject {
         }
     }
 
-    private func deliver(_ record: GenerationRecord, to destination: InsertionDestination,
+    private func deliver(_ record: GenerationRecord, to captured: InsertionDestination,
                          anchor: DictationDestination?, isTest: Bool, clipboardCount: Int,
                          session: UUID) async -> DeliveryReceipt {
+        var destination = captured
+        var insertionText = record.insertionText
+        if pasteAtCurrentCursor, !isTest, !record.insertionText.isEmpty {
+            // Follow the cursor to wherever it is now. Spacing and list
+            // continuation were composed for the original cursor, so text
+            // delivered elsewhere is the take on its own.
+            destination = await TextInserter.currentDestination()
+            if destination != captured { insertionText = record.finalText }
+        }
         var transcript = record.previewText.isEmpty ? record.finalText : record.previewText
         let message: String
         let deliveryStatus: DictationDeliveryStatus
@@ -1179,7 +1194,7 @@ final class InlayController: ObservableObject {
         } else {
             if sessionID == session { activity = .delivering; statusMessage = "Inserting at your cursor…" }
             let inserter = TextInserter()
-            let outcome = await inserter.deliver(record.insertionText, copying: record.finalText,
+            let outcome = await inserter.deliver(insertionText, copying: record.finalText,
                                                   to: destination, clipboardUnchangedSince: clipboardCount,
                                                   waitUntilReady: { await self.waitForCaptureRelease() },
                                                   isCaptureActive: { self.isHoldingCapture })

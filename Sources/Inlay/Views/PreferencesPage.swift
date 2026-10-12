@@ -81,6 +81,9 @@ private struct DevicePreferencesForm: View {
                             .controlSize(.small)
                     }
                 }
+                Toggle("Paste where the cursor is when text is ready", isOn: $controller.pasteAtCurrentCursor)
+                    .help("Click into another text field while recording or processing and the text goes there. Off pastes only at the cursor where you started, and copies if it moved. Password fields are never pasted into.")
+                    .accessibilityIdentifier("preferences.paste-at-current-cursor")
                 Toggle("Show language while recording", isOn: $controller.showDetectedLanguage)
                     .help("Shows the language the speech model hears in the recording capsule. Off skips the live recognition entirely.")
                     .accessibilityIdentifier("preferences.detected-language")
