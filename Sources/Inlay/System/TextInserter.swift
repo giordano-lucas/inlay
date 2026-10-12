@@ -514,7 +514,13 @@ final class TextInserter {
             // Chat apps route a paste on a page with nothing focused to their
             // composer (T3 Code blurs it on a click into the timeline). Only
             // cursor-following delivery targets the page, and only by pasting.
-            guard allowsPage, isChromiumPage(focused) else { return .clipboard }
+            guard allowsPage else { return .clipboard }
+            // A control beside a composer (its Send or model button) keeps focus
+            // after a click; deliver to the one text field next to it.
+            if let composer = composerNear(focused), focus(composer) {
+                return readDestinationSnapshot(expectedApplication: expectedApplication)
+            }
+            guard isChromiumPage(focused) else { return .clipboard }
             var page = focused
             page.isPage = true
             return .field(InsertionFieldSnapshot(focus: page, selection: nil, capturedAt: capturedAt,
@@ -561,6 +567,47 @@ final class TextInserter {
         guard AXUIElementCopyAttributeValue(focused.element, kAXRoleAttribute as CFString, &role) == .success,
               role as? String == "AXWebArea" else { return false }
         return usesChromium(AXUIElementCreateApplication(focused.applicationPID))
+    }
+
+    /// The single editable field around a focused web control, searching
+    /// outward a few ancestors. More than one candidate is ambiguous.
+    private nonisolated static func composerNear(_ focused: FocusedFieldSnapshot) -> AXUIElement? {
+        var role: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(focused.element, kAXRoleAttribute as CFString, &role) == .success,
+              let name = role as? String, name != "AXWebArea",
+              usesChromium(AXUIElementCreateApplication(focused.applicationPID)) else { return nil }
+        var ancestor = focused.element
+        for _ in 0..<6 {
+            guard let parent = elementAttribute(kAXParentAttribute as CFString, of: ancestor).element else { return nil }
+            ancestor = parent
+            var parentRole: CFTypeRef?
+            AXUIElementCopyAttributeValue(ancestor, kAXRoleAttribute as CFString, &parentRole)
+            if parentRole as? String == "AXWebArea" { return nil }
+            var queue = [ancestor], fields: [AXUIElement] = [], visited = 0
+            while !queue.isEmpty, visited < 400, fields.count < 2 {
+                let element = queue.removeFirst(); visited += 1
+                AXUIElementSetMessagingTimeout(element, 0.05)
+                if fieldEligibility(of: element) == .editable { fields.append(element); continue }
+                var children: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success {
+                    queue.append(contentsOf: (children as? [AXUIElement]) ?? [])
+                }
+            }
+            if fields.count > 1 { return nil }
+            if let field = fields.first { return field }
+        }
+        return nil
+    }
+
+    /// Moves keyboard focus to a field and waits briefly for the app to report it.
+    private nonisolated static func focus(_ field: AXUIElement) -> Bool {
+        guard AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
+        else { return false }
+        for _ in 0..<6 {
+            if case .found(let now) = readFocusedElement(), CFEqual(now.element, field) { return true }
+            usleep(50_000)
+        }
+        return false
     }
 
     /// A paste routed by the page lands in a field that now has focus.
