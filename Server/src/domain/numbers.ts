@@ -115,13 +115,17 @@ const cues = new Set(
   (
     "number numbers pr prs issue issues ticket tickets version page pages step steps chapter " +
     "line lines port room item row column episode season level build release sprint figure table " +
-    "numéro numéros étape étapes chapitre ligne lignes salle"
+    "numéro numéros étape étapes chapitre ligne lignes salle " +
+    // A spoken slash between numbers ("twenty four slash seven" → 24/7).
+    "slash"
   ).split(" "),
 );
 /** Words after a number that make even a small number a measurement.
  * Durations ("three hours") are left out: small ones read better as words. */
 const units = new Set(
-  "am pm a.m p.m percent ms gb mb kb tb km kg dollars euros pounds bucks x k h go mo".split(" "),
+  "am pm a.m p.m percent ms gb mb kb tb km kg dollars euros pounds bucks x k h go mo slash".split(
+    " ",
+  ),
 );
 
 interface Token {

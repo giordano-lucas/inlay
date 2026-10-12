@@ -340,6 +340,8 @@ export interface components {
       keepOriginalAudio: boolean;
       /** @description Write spoken English and French numbers as digits in the final text. Absent means false. */
       numbersAsDigits?: boolean;
+      /** @description Write a spoken "slash" before a word as a symbol ("in slash downloads" becomes "in /downloads"). Absent means false. */
+      pathsAsSymbols?: boolean;
     };
     PreferencesSnapshot: {
       revision: number;

@@ -48,6 +48,7 @@ import { cleanTranscript } from "./domain/cleaner.ts";
 import { composeDictation } from "./domain/composition.ts";
 import { formatSpokenList } from "./domain/lists.ts";
 import { digitizeNumbers } from "./domain/numbers.ts";
+import { writeSpokenPaths } from "./domain/paths.ts";
 import { evaluateCorrectionInWorker } from "./domain/correction-runtime.ts";
 import { maxInputCharacters, modelHints, processingRecord } from "./domain/correction.ts";
 
@@ -1126,10 +1127,11 @@ export class GenerationService {
           engineVersion: processing.engineVersion,
           processingSeconds: processing.processingSeconds,
         };
-      // After proofreading, whose validation compares number words.
-      const text = settings.numbersAsDigits
+      // After proofreading, whose validation compares number and slash words.
+      const digits = settings.numbersAsDigits
         ? digitizeNumbers(processing.outputText)
         : processing.outputText;
+      const text = settings.pathsAsSymbols ? writeSpokenPaths(digits) : digits;
       const formatted = { ...structured, text };
       const composition = composeDictation(formatted, previous);
       record.finalText = formatted.text;

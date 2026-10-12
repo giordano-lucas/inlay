@@ -202,6 +202,8 @@ struct ServerPreferencesPage: View {
                     Toggle("Proofread with Qwen", isOn: $draft.textCorrectionEnabled)
                     Toggle("Write numbers as digits", isOn: $draft.numbersAsDigits)
                         .help("“Three thousand and three” becomes 3003 in English and French. Lone small numbers stay words unless a unit or “number”, “version”, or “page” marks them.")
+                    Toggle("Write spoken slashes as symbols", isOn: $draft.pathsAsSymbols)
+                        .help("“In slash downloads” becomes “in /downloads”, “clone slash fork” becomes “clone/fork”, and “tilde slash desktop” becomes “~/desktop”. “A slash” and “slash command” stay words.")
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text("Cleanup instructions")
