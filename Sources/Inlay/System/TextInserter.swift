@@ -309,7 +309,9 @@ final class TextInserter {
         guard !Task.isCancelled, AXIsProcessTrusted(), !target.application.isTerminated else {
             return .blocked(reason: "Insertion was interrupted.")
         }
-        if let command = target.snapshot.pasteCommand {
+        // A search that failed while the key was pressed can succeed now that
+        // the app is idle; synthetic Cmd-V is ignored by some macOS versions.
+        if let command = target.snapshot.pasteCommand ?? NativePasteCommand.find(for: target.processIdentifier, within: 0.3) {
             switch command.invoke(canDispatch: {
                 // Menu readiness reads can take time. Check the field first,
                 // then the clipboard lease immediately before the action.
