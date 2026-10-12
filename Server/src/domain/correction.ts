@@ -32,6 +32,7 @@ const quantities = new Set(
     " ",
   ),
 );
+const spokenSymbols = new Set(["slash", "tilde"]);
 const contractions: Record<string, string[]> = {
   cannot: ["can", "not"],
   "can't": ["can", "not"],
@@ -202,6 +203,14 @@ export function evaluateCorrection(
     )
   )
     return reject("The rewrite changed a quantity.");
+  // Spoken symbols are content, not filler: "in slash downloads" names a path.
+  if (
+    !same(
+      before.filter((word) => spokenSymbols.has(word)),
+      after.filter((word) => spokenSymbols.has(word)),
+    )
+  )
+    return reject("The rewrite changed a spoken symbol.");
   if (!before.length) return reject(output === original ? undefined : "The rewrite added content.");
   const allowed = new Set(preferredTerms.flatMap(words));
   const comparedBefore = recognizedTerms(protectedSource, intersection(allowed, after)).map(
