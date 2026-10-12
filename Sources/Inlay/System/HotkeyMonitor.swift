@@ -360,7 +360,9 @@ final class HotkeyMonitor {
         case .leftMouseDown, .rightMouseDown:
             // In particular, Option+letter shortcuts during the debounce window
             // remain ordinary shortcuts, not surprise microphone activations.
-            if physicalDown { blockCurrentHold() }
+            // Once a hold is accepted, a click moves the cursor for delivery
+            // and must not discard the recording.
+            if physicalDown, !active { blockCurrentHold() }
         default:
             break
         }
