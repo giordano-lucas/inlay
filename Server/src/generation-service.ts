@@ -40,6 +40,7 @@ import {
   applyDictionary,
   defaultDictionary,
   dictionaryValidationError,
+  dictionaryBoostTerms,
   dictionaryVocabularyTerms,
 } from "./domain/dictionary.ts";
 import { cleanTranscript } from "./domain/cleaner.ts";
@@ -1062,8 +1063,8 @@ export class GenerationService {
       const speech = await this.inference.transcribe(
         join(this.directory(id), "inference.wav"),
         settings.language,
-        // Dictionary terms bias Parakeet's decoding toward their spelling.
-        dictionaryVocabularyTerms(settings.dictionary),
+        // Single-word dictionary terms bias Parakeet's decoding toward their spelling.
+        dictionaryBoostTerms(settings.dictionary),
         (value) => {
           void this.mutate(() => this.progress(id, value));
         },
@@ -1287,7 +1288,7 @@ export class GenerationService {
       const speech = await this.inference.transcribe(
         path,
         record.settings.preferences.language,
-        dictionaryVocabularyTerms(record.settings.preferences.dictionary),
+        dictionaryBoostTerms(record.settings.preferences.dictionary),
       );
       const current = this.records.get(id);
       if (!current || current.status !== "receiving" || !speech.text) return;

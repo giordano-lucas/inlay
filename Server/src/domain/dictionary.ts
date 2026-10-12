@@ -179,6 +179,15 @@ export function dictionaryVocabularyTerms(dictionary: PersonalDictionary) {
 
 export const vocabularyTerms = dictionaryVocabularyTerms;
 
+/** Terms that bias Parakeet's decoding: single words only ("Notte", "E2B").
+ * Biasing a longer term pulls its first word toward the rest when that word is
+ * spoken alone ("Notte labs" became "Notte.clabs" with "notte.cc"), and its
+ * words are ordinary speech that the dictionary replacement corrects afterwards.
+ */
+export function dictionaryBoostTerms(dictionary: PersonalDictionary) {
+  return dictionaryVocabularyTerms(dictionary).filter((term) => /^[\p{L}\p{N}]+$/u.test(term));
+}
+
 const escapePattern = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Match original graphemes once. Folded text retains an offset map, so canonical

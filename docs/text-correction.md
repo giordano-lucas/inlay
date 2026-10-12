@@ -8,7 +8,7 @@ Edit **Server preferences**, then **Save shared preferences**. All dictionary li
 
 - Preferred spellings normalize case. Explicit aliases replace whole words or phrases, such as `mini max → MiniMax`. Longer matches win, and replacements do not cascade.
 - Use narrow aliases like `off middleware → auth middleware`; a broad `off → auth` also changes legitimate “turn off.”
-- Dictionary terms also bias recognition (phrase boosting). Once Parakeet starts a word that begins a term, pieces that continue it gain a bonus, matched by letters and ignoring case, so `browser base` can become `browserbase`. Starts of at least three letters get a small bonus too, which can turn `grab loop` into `greploop`. Capitalization comes from the dictionary step afterward.
+- Single-word dictionary terms also bias recognition (phrase boosting); terms with spaces or punctuation, like `notte.cc` or `GitHub Actions`, only correct text afterward. Once Parakeet starts a word that begins a term, pieces that continue it gain a bonus, matched by letters and ignoring case, so `browser base` can become `browserbase`. Starts of at least three letters get a small bonus too, which can turn `grab loop` into `greploop`. Capitalization comes from the dictionary step afterward.
 - Boosting cannot help when Parakeet's first piece already differs from the term (`superbase` for Supabase, `whisper flow` for Wispr Flow). Add those spellings as aliases. A term that begins many ordinary words can occasionally capture one; check raw text in history and remove or rename the term if it does.
 - `INLAY_PHRASE_BOOST` on the server sets the bonus (default 12; 0 disables boosting).
 - Star priority terms to suggest them to Qwen first. Dictionary replacements and Qwen’s bounded hint budget still apply.
