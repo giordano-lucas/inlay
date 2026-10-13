@@ -177,7 +177,28 @@ final class TextInserter {
 
     /// The focused field now, read off the main actor; protected fields stay blocked.
     static func currentDestination() async -> InsertionDestination {
-        destination(from: await readOffMain { readDestinationSnapshot(allowsPage: true) })
+        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        return destination(from: await readOffMain { () -> InsertionDestinationSnapshot in
+            var snapshot = readDestinationSnapshot(allowsPage: true)
+            // A restarted Electron or Chromium app exposes no focus for a few
+            // seconds after the activation request sent at key press; a short
+            // take is ready before then.
+            guard case .clipboard = snapshot, let frontmost, frontmost != ProcessInfo.processInfo.processIdentifier,
+                  usesChromium(AXUIElementCreateApplication(frontmost)) else { return snapshot }
+            let deadline = ProcessInfo.processInfo.systemUptime + 3
+            while case .clipboard = snapshot, systemFocusIsAbsent(),
+                  ProcessInfo.processInfo.systemUptime < deadline, !Task.isCancelled {
+                usleep(100_000)
+                snapshot = readDestinationSnapshot(allowsPage: true)
+            }
+            return snapshot
+        })
+    }
+
+    private nonisolated static func systemFocusIsAbsent() -> Bool {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.2)
+        return elementAttribute(kAXFocusedApplicationAttribute as CFString, of: system).absent
     }
 
     /// Text that followed the cursor to another field is the take on its own;
