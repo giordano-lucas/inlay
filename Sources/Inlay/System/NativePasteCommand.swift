@@ -12,8 +12,19 @@ struct NativePasteCommand: @unchecked Sendable {
         case blocked
     }
 
-    nonisolated static func find(for pid: pid_t) -> Self? {
-        let deadline = ProcessInfo.processInfo.systemUptime + 0.75
+    nonisolated static func find(for pid: pid_t, within budget: TimeInterval = 0.75) -> Self? {
+        let deadline = ProcessInfo.processInfo.systemUptime + budget
+        // Each menu read waits 25 ms, so a busy app (often one that has just
+        // activated) fails a whole search. Every attempt is a complete search;
+        // repeat it until the budget ends.
+        while true {
+            if let command = search(for: pid, until: deadline) { return command }
+            guard !Task.isCancelled, ProcessInfo.processInfo.systemUptime + 0.05 < deadline else { return nil }
+            usleep(50_000)
+        }
+    }
+
+    private nonisolated static func search(for pid: pid_t, until deadline: TimeInterval) -> Self? {
         guard pid > 0, !Task.isCancelled, AXIsProcessTrusted(),
               let menu = NativePasteAX.menuBar(for: pid) else { return nil }
         let discovery = NativePasteCommandDiscovery<AXUIElement>(
