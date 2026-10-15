@@ -18,11 +18,13 @@ export interface ServerConfiguration {
 
 export const usage = `Inlay server — independent dictation service
 inlay-server --data-dir PATH --speech-helper PATH --speech-model PATH --vad-model PATH \
-  --proof-helper PATH --proof-model PATH [--host 127.0.0.1] [--port 8391] [--token-file PATH] [--dev]
+  --proof-helper PATH --proof-model PATH [--retry-model PATH] [--host 127.0.0.1] [--port 8391] \
+  [--token-file PATH] [--dev]
 
 macOS uses Parakeet/Metal and Qwen/MLX. Linux uses Parakeet/CUDA or CPU and Qwen/llama.cpp.
 Models must already exist. The server never downloads or imports personal data automatically.
-Use persistent storage for --data-dir. Remote bindings require --token-file.
+--retry-model is an optional Whisper ggml model, loaded only to retry a take
+that Parakeet dropped most of. Use persistent storage for --data-dir. Remote bindings require --token-file.
 `;
 
 const names = new Set([
@@ -35,6 +37,7 @@ const names = new Set([
   "vad-model",
   "proof-helper",
   "proof-model",
+  "retry-model",
 ]);
 export const isLoopbackHost = (host: string) => ["localhost", "127.0.0.1", "::1"].includes(host);
 const expandPath = (value: string) =>
@@ -117,6 +120,9 @@ export async function parseConfiguration(
       vadModel: path("vad-model", "INLAY_VAD_PATH"),
       proofHelper: path("proof-helper", "INLAY_TEXT_ENGINE_PATH"),
       proofModel: path("proof-model", "INLAY_TEXT_MODEL"),
+      retryModel: value("retry-model", "INLAY_RETRY_MODEL")
+        ? path("retry-model", "INLAY_RETRY_MODEL")
+        : undefined,
     }),
   } satisfies ServerConfiguration;
 }

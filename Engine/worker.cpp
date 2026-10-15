@@ -311,20 +311,76 @@ void transcribe(parakeet_context *context, whisper_vad_context *vad, int threads
           {"tokenCount", boosted > 0 ? boosted : 0}, {"tokenBudget", boosted > 0 ? static_cast<int>(terms.size()) : 0}});
 }
 
+/// Retry recognition with a Whisper model in a process of its own: load,
+/// transcribe once, print one result, and exit, so the model's memory is
+/// returned as soon as the retry ends. Whisper takes a language prior and holds
+/// long multilingual recordings in one language where Parakeet can drift.
+int recognizeOnce(const std::string &model, const std::string &path, const std::string &language,
+                  const std::string &prompt, int threads) {
+    const auto start = Clock::now();
+    auto loaded = readAudio(path);
+    if (const auto failure = std::get_if<std::string>(&loaded)) {
+        emitError(*failure);
+        return 1;
+    }
+    auto &audio = std::get<Audio>(loaded);
+    std::string text;
+    std::string detected = language;
+    if (!audio.silent) {
+        auto contextParameters = whisper_context_default_params();
+        contextParameters.use_gpu = true;
+        contextParameters.flash_attn = true;
+        const std::unique_ptr<whisper_context, decltype(&whisper_free)> context(
+            whisper_init_from_file_with_params(model.c_str(), contextParameters), whisper_free);
+        if (!context) {
+            emitError("The retry model could not be loaded. Check available memory or download it again.");
+            return 1;
+        }
+        auto parameters = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
+        parameters.beam_search.beam_size = 5;
+        parameters.n_threads = threads;
+        parameters.language = language.c_str();
+        parameters.initial_prompt = prompt.empty() ? nullptr : prompt.c_str();
+        parameters.print_progress = false;
+        parameters.print_realtime = false;
+        parameters.print_timestamps = false;
+        parameters.print_special = false;
+        if (whisper_full(context.get(), parameters, audio.samples.data(), static_cast<int>(audio.samples.size())) != 0) {
+            emitError("Retry transcription failed.");
+            return 1;
+        }
+        for (int i = 0; i < whisper_full_n_segments(context.get()); ++i) {
+            text += whisper_full_get_segment_text(context.get(), i);
+        }
+        if (const auto name = whisper_lang_str(whisper_full_lang_id(context.get()))) detected = name;
+    }
+    emit({{"type", "result"}, {"text", trim(std::move(text))}, {"duration", audio.duration},
+          {"elapsed", std::chrono::duration<double>(Clock::now() - start).count()}, {"language", detected}});
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
     std::ios::sync_with_stdio(false);
     std::string model;
     std::string vadModel;
+    std::string retryModel;
+    std::string retryPath;
+    std::string retryLanguage = "auto";
+    std::string retryPrompt;
     int threads = static_cast<int>(std::clamp(std::thread::hardware_concurrency(), 1u, 8u));
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         if (argument == "--help") {
-            std::fputs("Usage: inlay-engine --model PATH --vad-model PATH [--threads 1..32]\nJSON lines on stdin and stdout; diagnostics only on stderr.\n", stderr);
+            std::fputs("Usage: inlay-engine --model PATH --vad-model PATH [--threads 1..32]\n"
+                       "       inlay-engine --retry-model PATH --transcribe WAV [--language CODE] [--prompt TEXT] [--threads 1..32]\n"
+                       "JSON lines on stdout; diagnostics only on stderr.\n", stderr);
             return 0;
         }
-        if ((argument != "--model" && argument != "--vad-model" && argument != "--threads") || i + 1 >= argc) {
+        static const std::unordered_set<std::string> options = {
+            "--model", "--vad-model", "--threads", "--retry-model", "--transcribe", "--language", "--prompt"};
+        if (!options.count(argument) || i + 1 >= argc) {
             emitError("Usage: inlay-engine --model PATH --vad-model PATH [--threads 1..32]");
             return 2;
         }
@@ -333,6 +389,14 @@ int main(int argc, char **argv) {
             model = value;
         } else if (argument == "--vad-model") {
             vadModel = value;
+        } else if (argument == "--retry-model") {
+            retryModel = value;
+        } else if (argument == "--transcribe") {
+            retryPath = value;
+        } else if (argument == "--language") {
+            retryLanguage = value;
+        } else if (argument == "--prompt") {
+            retryPrompt = value;
         } else {
             const auto parsed = std::from_chars(value.data(), value.data() + value.size(), threads);
             if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || threads < 1 || threads > 32) {
@@ -342,6 +406,16 @@ int main(int argc, char **argv) {
         }
     }
     std::error_code error;
+    if (!retryModel.empty()) {
+        if (!std::filesystem::is_regular_file(retryModel, error) || retryPath.empty() ||
+            (retryLanguage != "auto" && whisper_lang_id(retryLanguage.c_str()) < 0) || retryPrompt.size() > maxPromptBytes) {
+            emitError("A retry needs a Whisper model, a WAV path, a valid language, and a prompt of at most 8192 bytes.");
+            return 2;
+        }
+        whisper_log_set(libraryLog, nullptr);
+        ggml_log_set(libraryLog, nullptr);
+        return recognizeOnce(retryModel, retryPath, retryLanguage, retryPrompt, threads);
+    }
     if (model.empty() || !std::filesystem::is_regular_file(model, error)) {
         emitError("The speech model is missing. Configure the server's speech model path.");
         return 2;
