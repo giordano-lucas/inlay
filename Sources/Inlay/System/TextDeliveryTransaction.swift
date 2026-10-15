@@ -102,7 +102,8 @@ struct TextDeliveryTransaction {
         }
         var clipboard = DeliveryClipboardLease(pasteboard: pasteboard, snapshot: snapshot)
         defer { clipboard.restore() }
-        guard clipboard.write(text, transient: true) else {
+        let promise = PromisedPasteText(text)
+        guard clipboard.write(text, transient: true, promise: promise) else {
             return .failed(reason: "The clipboard changed or could not accept the transcript. Your words are ready to copy.")
         }
 
@@ -124,6 +125,7 @@ struct TextDeliveryTransaction {
             return .failed(reason: ClipboardCopyError.changed.localizedDescription)
         }
         guard !Task.isCancelled else { return .failed(reason: Self.cancelled) }
+        promise.markDispatch()
         switch environment.postPaste({
             !Task.isCancelled && !shouldDeferForCapture && pasteboard.changeCount == stagedChangeCount
         }) {
@@ -138,12 +140,36 @@ struct TextDeliveryTransaction {
                 .failed(reason: "macOS could not send the paste. Your words are ready to copy.")
         }
 
+        // The app reads the clipboard only when it pastes. A read before the
+        // paste (a clipboard manager) hides that signal: watch the caret instead.
+        if !promise.requestedBeforeDispatch {
+            guard await awaitRequest(of: promise) else { return .failed(reason: Self.cancelled) }
+            if promise.requestedAfterDispatch {
+                // The caret only anchors a list continuation; the paste is done.
+                _ = await environment.confirmation(text)
+                return .inserted
+            }
+            let copied = clipboard.keepBackup(clipboardText, unchangedSince: changeCount)
+            return copied ? .copied(reason: "The app did not take the paste. Copied to clipboard") :
+                .failed(reason: "The app did not take the paste. Your words are ready to copy.")
+        }
         let confirmation = await confirm(text)
         guard !Task.isCancelled, confirmation != .blocked else {
             return .unconfirmed(clipboardBackup: false)
         }
         if confirmation == .confirmed { return .inserted }
         return .unconfirmed(clipboardBackup: clipboard.keepBackup(clipboardText, unchangedSince: changeCount))
+    }
+
+    /// Waits until the app reads the pasted text or gives up. False if cancelled.
+    private func awaitRequest(of promise: PromisedPasteText) async -> Bool {
+        // Busy Electron apps can take over a second to handle Cmd-V.
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(2000))
+        while !promise.requestedAfterDispatch, ContinuousClock.now < deadline {
+            guard !Task.isCancelled else { return false }
+            do { try await environment.pause(25_000_000) } catch { return false }
+        }
+        return !Task.isCancelled
     }
 
     private static let cancelled = "Dictation was cancelled. Nothing was copied."
@@ -220,13 +246,17 @@ private struct DeliveryClipboardLease {
         ownedChangeCount.map { pasteboard.changeCount == $0 } ?? false
     }
 
-    mutating func write(_ text: String, transient: Bool) -> Bool {
+    mutating func write(_ text: String, transient: Bool, promise: PromisedPasteText? = nil) -> Bool {
         let expectedCount = ownedChangeCount ?? snapshot.changeCount
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !Task.isCancelled,
               pasteboard.changeCount == expectedCount else { return false }
         let item = NSPasteboardItem()
-        guard item.setString(text, forType: .string) else { return false }
+        if let promise {
+            guard item.setDataProvider(promise, forTypes: [.string]) else { return false }
+        } else {
+            guard item.setString(text, forType: .string) else { return false }
+        }
         if transient {
             item.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
         }
@@ -252,5 +282,34 @@ private struct DeliveryClipboardLease {
 
     func restore() {
         if let ownedChangeCount { snapshot.restore(on: pasteboard, onlyIfUnchangedSince: ownedChangeCount) }
+    }
+}
+
+/// Text that the clipboard hands over only when an app reads it. An app reads
+/// the clipboard when it pastes, so a read after Cmd-V confirms the paste in
+/// any app, including terminals that report no caret.
+final class PromisedPasteText: NSObject, NSPasteboardItemDataProvider, @unchecked Sendable {
+    private let text: String
+    // The pasteboard may ask for data on any thread.
+    private let lock = NSLock()
+    private var dispatched = false
+    private var requestedBefore = false
+    private var requestedAfter = false
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var requestedBeforeDispatch: Bool { lock.withLock { requestedBefore } }
+    var requestedAfterDispatch: Bool { lock.withLock { requestedAfter } }
+
+    func markDispatch() { lock.withLock { dispatched = true } }
+
+    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem,
+                    provideDataForType type: NSPasteboard.PasteboardType) {
+        lock.withLock {
+            if dispatched { requestedAfter = true } else { requestedBefore = true }
+        }
+        item.setString(text, forType: type)
     }
 }

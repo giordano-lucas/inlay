@@ -360,35 +360,33 @@ final class TextInserter {
         guard !Task.isCancelled, AXIsProcessTrusted(), !target.application.isTerminated else {
             return .blocked(reason: "Insertion was interrupted.")
         }
-        // A search that failed while the key was pressed can succeed now that
-        // the app is idle; synthetic Cmd-V is ignored by some macOS versions.
-        if let command = target.snapshot.pasteCommand ?? NativePasteCommand.find(for: target.processIdentifier, within: 0.3) {
-            switch command.invoke(canDispatch: {
-                // Menu readiness reads can take time. Check the field first,
-                // then the clipboard lease immediately before the action.
-                readyToDispatch(into: target) && canDispatch()
-            }) {
-            case .dispatched: return .sent
-            case .blocked: return .blocked(reason: "The app's Paste command could not be invoked safely.")
-            case .unavailable: break
-            }
-        }
-        // Only a definitely unattempted/unsupported menu action can fall back.
-        // Never send a second route after a successful or timed-out AX action.
+        // Cmd-V is what a person presses, so every app handles it. The app's
+        // Edit > Paste item is only used when Inlay may not post key events.
         let pasteKey = KeyboardLayout.keyCode(producing: "v") ?? 9
-        guard let source = CGEventSource(stateID: .combinedSessionState),
-              let down = CGEvent(keyboardEventSource: source, virtualKey: pasteKey, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: pasteKey, keyDown: false) else {
-            return .unavailable
+        if CGPreflightPostEventAccess(),
+           let source = CGEventSource(stateID: .combinedSessionState),
+           let down = CGEvent(keyboardEventSource: source, virtualKey: pasteKey, keyDown: true),
+           let up = CGEvent(keyboardEventSource: source, virtualKey: pasteKey, keyDown: false) {
+            down.flags = .maskCommand
+            up.flags = .maskCommand
+            guard readyToDispatch(into: target), canDispatch() else {
+                return .blocked(reason: "Focus, cursor, or clipboard changed before pasting.")
+            }
+            down.postToPid(target.processIdentifier)
+            up.postToPid(target.processIdentifier)
+            return .sent
         }
-        down.flags = .maskCommand
-        up.flags = .maskCommand
-        guard CGPreflightPostEventAccess(), readyToDispatch(into: target), canDispatch() else {
-            return .blocked(reason: "Focus, cursor, clipboard, or input access changed before pasting.")
+        guard let command = target.snapshot.pasteCommand ??
+            NativePasteCommand.find(for: target.processIdentifier, within: 0.3) else { return .unavailable }
+        switch command.invoke(canDispatch: {
+            // Menu readiness reads can take time. Check the field first,
+            // then the clipboard lease immediately before the action.
+            readyToDispatch(into: target) && canDispatch()
+        }) {
+        case .dispatched: return .sent
+        case .blocked: return .blocked(reason: "The app's Paste command could not be invoked safely.")
+        case .unavailable: return .unavailable
         }
-        down.postToPid(target.processIdentifier)
-        up.postToPid(target.processIdentifier)
-        return .sent
     }
 
     private static func readyToDispatch(into target: InsertionTarget) -> Bool {
