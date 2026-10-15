@@ -290,6 +290,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ServerPreferences/numbersAsDigits`.
             public var numbersAsDigits: Swift.Bool?
+            /// Write a spoken "slash" before a word as a symbol ("in slash downloads" becomes "in /downloads"). Absent means false.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ServerPreferences/pathsAsSymbols`.
+            public var pathsAsSymbols: Swift.Bool?
             /// Creates a new `ServerPreferences`.
             ///
             /// - Parameters:
@@ -300,6 +304,7 @@ extension Components {
             ///   - textCorrectionEnabled:
             ///   - keepOriginalAudio:
             ///   - numbersAsDigits: Write spoken English and French numbers as digits in the final text. Absent means false.
+            ///   - pathsAsSymbols: Write a spoken "slash" before a word as a symbol ("in slash downloads" becomes "in /downloads"). Absent means false.
             public init(
                 language: Components.Schemas.ServerPreferences.LanguagePayload,
                 proofreadingPrompt: Swift.String? = nil,
@@ -307,7 +312,8 @@ extension Components {
                 dictionary: Components.Schemas.PersonalDictionary,
                 textCorrectionEnabled: Swift.Bool,
                 keepOriginalAudio: Swift.Bool,
-                numbersAsDigits: Swift.Bool? = nil
+                numbersAsDigits: Swift.Bool? = nil,
+                pathsAsSymbols: Swift.Bool? = nil
             ) {
                 self.language = language
                 self.proofreadingPrompt = proofreadingPrompt
@@ -316,6 +322,7 @@ extension Components {
                 self.textCorrectionEnabled = textCorrectionEnabled
                 self.keepOriginalAudio = keepOriginalAudio
                 self.numbersAsDigits = numbersAsDigits
+                self.pathsAsSymbols = pathsAsSymbols
             }
             public enum CodingKeys: String, CodingKey {
                 case language
@@ -325,6 +332,7 @@ extension Components {
                 case textCorrectionEnabled
                 case keepOriginalAudio
                 case numbersAsDigits
+                case pathsAsSymbols
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -356,6 +364,10 @@ extension Components {
                     Swift.Bool.self,
                     forKey: .numbersAsDigits
                 )
+                self.pathsAsSymbols = try container.decodeIfPresent(
+                    Swift.Bool.self,
+                    forKey: .pathsAsSymbols
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "language",
                     "proofreadingPrompt",
@@ -363,7 +375,8 @@ extension Components {
                     "dictionary",
                     "textCorrectionEnabled",
                     "keepOriginalAudio",
-                    "numbersAsDigits"
+                    "numbersAsDigits",
+                    "pathsAsSymbols"
                 ])
             }
         }

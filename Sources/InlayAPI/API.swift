@@ -33,6 +33,7 @@ public struct ServerPreferences: Codable, Equatable, Sendable {
     public var textCorrectionEnabled: Bool
     public var keepOriginalAudio: Bool
     public var numbersAsDigits: Bool
+    public var pathsAsSymbols: Bool
     public static let maximumProofreadingPromptBytes = 4096
     public static let maximumVocabularyTermBytes = 16_384
     public static let defaultProofreadingPrompt = """
@@ -56,13 +57,16 @@ public struct ServerPreferences: Codable, Equatable, Sendable {
     public static let supportedLanguages = ["en", "auto", "es", "fr", "de", "it", "pt", "nl", "ja", "zh", "ko", "hi", "ar", "pl", "ru", "uk", "sv"]
     public init(language: String = "en", proofreadingPrompt: String = Self.defaultProofreadingPrompt, vocabulary: String = "",
                 dictionary: PersonalDictionary = .default, textCorrectionEnabled: Bool = true,
-                keepOriginalAudio: Bool = true, numbersAsDigits: Bool = false) {
+                keepOriginalAudio: Bool = true, numbersAsDigits: Bool = false,
+                pathsAsSymbols: Bool = false) {
         self.language = language; self.proofreadingPrompt = proofreadingPrompt; self.vocabulary = vocabulary
         self.dictionary = dictionary; self.textCorrectionEnabled = textCorrectionEnabled
         self.keepOriginalAudio = keepOriginalAudio; self.numbersAsDigits = numbersAsDigits
+        self.pathsAsSymbols = pathsAsSymbols
     }
     private enum CodingKeys: String, CodingKey {
-        case language, proofreadingPrompt, vocabulary, dictionary, textCorrectionEnabled, keepOriginalAudio, numbersAsDigits
+        case language, proofreadingPrompt, vocabulary, dictionary, textCorrectionEnabled, keepOriginalAudio, numbersAsDigits,
+             pathsAsSymbols
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -73,6 +77,7 @@ public struct ServerPreferences: Codable, Equatable, Sendable {
         textCorrectionEnabled = try values.decode(Bool.self, forKey: .textCorrectionEnabled)
         keepOriginalAudio = try values.decode(Bool.self, forKey: .keepOriginalAudio)
         numbersAsDigits = try values.decodeIfPresent(Bool.self, forKey: .numbersAsDigits) ?? false
+        pathsAsSymbols = try values.decodeIfPresent(Bool.self, forKey: .pathsAsSymbols) ?? false
     }
     public var validationError: String? {
         if !Self.supportedLanguages.contains(language) { return "Choose a supported language." }

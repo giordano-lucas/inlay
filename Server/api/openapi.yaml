@@ -636,6 +636,9 @@ components:
         numbersAsDigits:
           type: "boolean"
           description: "Write spoken English and French numbers as digits in the final text. Absent means false."
+        pathsAsSymbols:
+          type: "boolean"
+          description: 'Write a spoken "slash" before a word as a symbol ("in slash downloads" becomes "in /downloads"). Absent means false.'
       required:
         - "language"
         - "vocabulary"
