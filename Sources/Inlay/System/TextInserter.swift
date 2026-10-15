@@ -45,6 +45,8 @@ fileprivate struct FocusedFieldSnapshot: @unchecked Sendable {
     let applicationPID: pid_t
     let elementPID: pid_t
     let element: AXUIElement
+    /// A Chromium page with nothing editable focused, which only a paste reaches.
+    var isPage = false
 
     func isSameField(as other: Self) -> Bool {
         applicationPID == other.applicationPID && elementPID == other.elementPID &&
@@ -173,6 +175,51 @@ final class TextInserter {
         return InsertionDestinationCapture(task: task, cutoff: cutoff)
     }
 
+    /// The focused field now, read off the main actor; protected fields stay blocked.
+    static func currentDestination() async -> InsertionDestination {
+        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        return destination(from: await readOffMain { () -> InsertionDestinationSnapshot in
+            var snapshot = readDestinationSnapshot(allowsPage: true)
+            // A restarted Electron or Chromium app exposes no focus for a few
+            // seconds after the activation request sent at key press; a short
+            // take is ready before then.
+            guard case .clipboard = snapshot, let frontmost, frontmost != ProcessInfo.processInfo.processIdentifier,
+                  usesChromium(AXUIElementCreateApplication(frontmost)) else { return snapshot }
+            let deadline = ProcessInfo.processInfo.systemUptime + 3
+            while case .clipboard = snapshot, systemFocusIsAbsent(),
+                  ProcessInfo.processInfo.systemUptime < deadline, !Task.isCancelled {
+                usleep(100_000)
+                snapshot = readDestinationSnapshot(allowsPage: true)
+            }
+            return snapshot
+        })
+    }
+
+    private nonisolated static func systemFocusIsAbsent() -> Bool {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.2)
+        return elementAttribute(kAXFocusedApplicationAttribute as CFString, of: system).absent
+    }
+
+    /// Text that followed the cursor to another field is the take on its own;
+    /// separate it from a word that ends right before the cursor there.
+    static func spaced(_ text: String, before target: InsertionTarget) async -> String {
+        guard let selection = target.selection, selection.location > 0,
+              let first = text.first, first.isLetter || first.isNumber else { return text }
+        let focus = target.snapshot.focus
+        let previous = await readOffMain { () -> String? in
+            var range = CFRange(location: selection.location - 1, length: 1)
+            guard let parameter = AXValueCreate(.cfRange, &range) else { return nil }
+            var value: CFTypeRef?
+            guard AXUIElementCopyParameterizedAttributeValue(
+                focus.element, kAXStringForRangeParameterizedAttribute as CFString, parameter, &value) == .success
+            else { return nil }
+            return value as? String
+        }
+        guard let character = previous?.last, !character.isWhitespace, !"([{\"'“‘/".contains(character) else { return text }
+        return " " + text
+    }
+
     static func captureDestination() -> InsertionDestination {
         destination(from: readDestinationSnapshot())
     }
@@ -262,6 +309,10 @@ final class TextInserter {
     private func confirm(_ text: String, in target: InsertionTarget) async -> DeliveryConfirmation {
         guard !target.application.isTerminated else { return .unavailable }
         let expected = target.snapshot
+        if expected.focus.isPage {
+            let pid = expected.focus.applicationPID
+            return await Self.readOffMain { Self.focusedFieldContains(text, in: pid) } ? .confirmed : .pending
+        }
         let probe = await Self.readOffMain { Self.probeField(expected.focus) }
         guard !Task.isCancelled else { return .blocked }
         switch probe {
@@ -370,7 +421,8 @@ final class TextInserter {
         switch fieldEligibility(of: focused.element) {
         case .editable: break
         case .protected: return .blocked(reason: "This field is protected.")
-        case .notEditable: return .changed(reason: "The field is no longer editable.")
+        case .notEditable:
+            guard expected.isPage else { return .changed(reason: "The field is no longer editable.") }
         case .unverified, nil: return .blocked(reason: "The field's safety could not be verified.")
         }
         guard focused.isSameField(as: expected) else { return .changed(reason: "Focus changed.") }
@@ -450,7 +502,8 @@ final class TextInserter {
         }
     }
 
-    private nonisolated static func readDestinationSnapshot(expectedApplication: FocusedApplicationSnapshot? = nil) -> InsertionDestinationSnapshot {
+    private nonisolated static func readDestinationSnapshot(expectedApplication: FocusedApplicationSnapshot? = nil,
+                                                            allowsPage: Bool = false) -> InsertionDestinationSnapshot {
         guard !Task.isCancelled, AXIsProcessTrusted() else {
             return .blocked(reason: "Allow Accessibility access to check the destination safely. Nothing was pasted or copied.")
         }
@@ -478,7 +531,22 @@ final class TextInserter {
         if let expectedApplication, !applicationIsFocused(expectedApplication) {
             return .blocked(reason: "Focus changed while preparing dictation. Nothing was pasted or copied.")
         }
-        if eligibility == .notEditable { return .clipboard }
+        if eligibility == .notEditable {
+            // Chat apps route a paste on a page with nothing focused to their
+            // composer (T3 Code blurs it on a click into the timeline). Only
+            // cursor-following delivery targets the page, and only by pasting.
+            guard allowsPage else { return .clipboard }
+            // A control beside a composer (its Send or model button) keeps focus
+            // after a click; deliver to the one text field next to it.
+            if let composer = composerNear(focused), focus(composer) {
+                return readDestinationSnapshot(expectedApplication: expectedApplication)
+            }
+            guard isChromiumPage(focused) else { return .clipboard }
+            var page = focused
+            page.isPage = true
+            return .field(InsertionFieldSnapshot(focus: page, selection: nil, capturedAt: capturedAt,
+                                                strategy: .keyboardPaste, pasteCommand: nil))
+        }
         return .field(InsertionFieldSnapshot(focus: focused, selection: selection, capturedAt: capturedAt,
                                             strategy: .keyboardPaste, pasteCommand: nil))
     }
@@ -513,6 +581,65 @@ final class TextInserter {
             return .blocked(reason: "Focus or Accessibility access changed while preparing dictation. Nothing was pasted or copied.")
         }
         return InsertionAccessibilityPolicy.afterChromiumWrite(enhanced)
+    }
+
+    private nonisolated static func isChromiumPage(_ focused: FocusedFieldSnapshot) -> Bool {
+        var role: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(focused.element, kAXRoleAttribute as CFString, &role) == .success,
+              role as? String == "AXWebArea" else { return false }
+        return usesChromium(AXUIElementCreateApplication(focused.applicationPID))
+    }
+
+    /// The single editable field around a focused web control, searching
+    /// outward a few ancestors. More than one candidate is ambiguous.
+    private nonisolated static func composerNear(_ focused: FocusedFieldSnapshot) -> AXUIElement? {
+        var role: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(focused.element, kAXRoleAttribute as CFString, &role) == .success,
+              let name = role as? String, name != "AXWebArea",
+              usesChromium(AXUIElementCreateApplication(focused.applicationPID)) else { return nil }
+        var ancestor = focused.element
+        for _ in 0..<6 {
+            guard let parent = elementAttribute(kAXParentAttribute as CFString, of: ancestor).element else { return nil }
+            ancestor = parent
+            var parentRole: CFTypeRef?
+            AXUIElementCopyAttributeValue(ancestor, kAXRoleAttribute as CFString, &parentRole)
+            if parentRole as? String == "AXWebArea" { return nil }
+            var queue = [ancestor], fields: [AXUIElement] = [], visited = 0
+            while !queue.isEmpty, visited < 400, fields.count < 2 {
+                let element = queue.removeFirst(); visited += 1
+                AXUIElementSetMessagingTimeout(element, 0.05)
+                if fieldEligibility(of: element) == .editable { fields.append(element); continue }
+                var children: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success {
+                    queue.append(contentsOf: (children as? [AXUIElement]) ?? [])
+                }
+            }
+            if fields.count > 1 { return nil }
+            if let field = fields.first { return field }
+        }
+        return nil
+    }
+
+    /// Moves keyboard focus to a field and waits briefly for the app to report it.
+    private nonisolated static func focus(_ field: AXUIElement) -> Bool {
+        guard AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
+        else { return false }
+        for _ in 0..<6 {
+            if case .found(let now) = readFocusedElement(), CFEqual(now.element, field) { return true }
+            usleep(50_000)
+        }
+        return false
+    }
+
+    /// A paste routed by the page lands in a field that now has focus.
+    private nonisolated static func focusedFieldContains(_ text: String, in pid: pid_t) -> Bool {
+        guard case .found(let focused) = readFocusedElement(), focused.applicationPID == pid,
+              fieldEligibility(of: focused.element) == .editable else { return false }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(focused.element, kAXValueAttribute as CFString, &value) == .success,
+              let current = value as? String else { return false }
+        let inserted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !inserted.isEmpty && current.contains(inserted)
     }
 
     /// Chromium browsers and Electron apps ship a renderer helper; only they

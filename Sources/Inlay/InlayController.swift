@@ -123,6 +123,11 @@ final class InlayController: ObservableObject {
             if !applyingConfiguration { configuration.update { $0.playSoundEffects = playSoundEffects } }
         }
     }
+    @Published var pasteAtCurrentCursor = false {
+        didSet {
+            if !applyingConfiguration { configuration.update { $0.pasteAtCurrentCursor = pasteAtCurrentCursor } }
+        }
+    }
     @Published var showDetectedLanguage = false {
         didSet {
             if !applyingConfiguration { configuration.update { $0.showDetectedLanguage = showDetectedLanguage } }
@@ -286,6 +291,7 @@ final class InlayController: ObservableObject {
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
         if playSoundEffects != settings.playSoundEffects { playSoundEffects = settings.playSoundEffects }
         if showDetectedLanguage != settings.showDetectedLanguage { showDetectedLanguage = settings.showDetectedLanguage }
+        if pasteAtCurrentCursor != settings.pasteAtCurrentCursor { pasteAtCurrentCursor = settings.pasteAtCurrentCursor }
         applyingConfiguration = false
     }
 
@@ -811,6 +817,13 @@ final class InlayController: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([sounds.directory])
     }
 
+    /// Unconditional: the transcript replaces whatever the clipboard holds.
+    private static func copyAsFallback(_ text: String) -> Bool {
+        guard !Task.isCancelled else { return false }
+        if case .success = DictationClipboard.copy(text, to: .general) { return true }
+        return false
+    }
+
     func copyLastTranscript() {
         guard !lastTranscript.isEmpty, !isBusy else { return }
         switch DictationClipboard.copy(lastTranscript, to: .general) {
@@ -1153,9 +1166,23 @@ final class InlayController: ObservableObject {
         }
     }
 
-    private func deliver(_ record: GenerationRecord, to destination: InsertionDestination,
+    private func deliver(_ record: GenerationRecord, to captured: InsertionDestination,
                          anchor: DictationDestination?, isTest: Bool, clipboardCount: Int,
                          session: UUID) async -> DeliveryReceipt {
+        var destination = captured
+        var insertionText = record.insertionText
+        if pasteAtCurrentCursor, !isTest, !record.insertionText.isEmpty {
+            // Follow the cursor to wherever it is now. Spacing and list
+            // continuation were composed for the original cursor, so text
+            // delivered elsewhere is the take on its own.
+            destination = await TextInserter.currentDestination()
+            if destination != captured {
+                insertionText = record.finalText
+                if let target = destination.target {
+                    insertionText = await TextInserter.spaced(insertionText, before: target)
+                }
+            }
+        }
         var transcript = record.previewText.isEmpty ? record.finalText : record.previewText
         let message: String
         let deliveryStatus: DictationDeliveryStatus
@@ -1179,7 +1206,7 @@ final class InlayController: ObservableObject {
         } else {
             if sessionID == session { activity = .delivering; statusMessage = "Inserting at your cursor…" }
             let inserter = TextInserter()
-            let outcome = await inserter.deliver(record.insertionText, copying: record.finalText,
+            let outcome = await inserter.deliver(insertionText, copying: record.finalText,
                                                   to: destination, clipboardUnchangedSince: clipboardCount,
                                                   waitUntilReady: { await self.waitForCaptureRelease() },
                                                   isCaptureActive: { self.isHoldingCapture })
@@ -1195,17 +1222,30 @@ final class InlayController: ObservableObject {
                 }
                 message = "Inserted at your cursor"; deliveryStatus = .inserted; status = "Inserted"
                 cue(.success)
-            case .copied(let reason):
-                transcript = record.finalText; message = reason; deliveryStatus = .copied; status = "Copied"
+            case .copied:
+                transcript = record.finalText
+                message = "Could not paste here. Copied to clipboard: press ⌘V."
+                deliveryStatus = .copied; status = "Copied"
                 cue(.alert)
             case .unconfirmed(let backup):
                 transcript = record.finalText
-                message = backup ? "Insertion unconfirmed. Copied to clipboard if needed." : "Insertion unconfirmed. Your words are here to copy."
+                message = backup || Self.copyAsFallback(record.finalText)
+                    ? "The paste could not be confirmed. Copied to clipboard: press ⌘V if it is missing."
+                    : "Insertion unconfirmed. Your words are here to copy."
                 deliveryStatus = .unconfirmed; status = "Check insertion"
                 cue(.alert)
             case .failed(let reason):
-                transcript = record.finalText; message = reason; deliveryStatus = .failed; status = "Ready to copy"
-                cue(.error)
+                transcript = record.finalText
+                // Text that could not be pasted always lands on the clipboard,
+                // even over something copied during the take: ⌘V is the fallback.
+                if Self.copyAsFallback(record.finalText) {
+                    message = "Could not paste here. Copied to clipboard: press ⌘V."
+                    deliveryStatus = .copied; status = "Copied"
+                    cue(.alert)
+                } else {
+                    message = reason; deliveryStatus = .failed; status = "Ready to copy"
+                    cue(.error)
+                }
             }
         }
         lastTranscript = transcript
