@@ -272,6 +272,17 @@ void transcribe(parakeet_context *context, whisper_vad_context *vad, int threads
         // Keep the complete recording when there is speech; this avoids cutting
         // off quiet word boundaries or short pauses inside a sentence.
     }
+    // Vocabulary terms bias decoding toward their spelling (phrase boosting).
+    // INLAY_PHRASE_BOOST sets the log-probability bonus; 0 disables it.
+    static const float boostScore = [] {
+        const char *value = std::getenv("INLAY_PHRASE_BOOST");
+        return value ? std::strtof(value, nullptr) : 12.0f;
+    }();
+    std::vector<const char *> phrases;
+    if (boostScore > 0.0f) {
+        for (const auto &term : terms) phrases.push_back(term.c_str());
+    }
+    const int boosted = parakeet_set_boost_phrases(context, phrases.data(), static_cast<int>(phrases.size()), boostScore);
     if (!audio.silent) {
         auto parameters = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
         parameters.n_threads = threads;
@@ -292,10 +303,12 @@ void transcribe(parakeet_context *context, whisper_vad_context *vad, int threads
     reportProgress(nullptr, nullptr, 100, &progress);
     emit({{"type", "result"}, {"id", *id}, {"text", trim(std::move(text))},
           {"duration", audio.duration}, {"elapsed", std::chrono::duration<double>(Clock::now() - start).count()},
-          // Parakeet auto-selects the spoken language but exposes no language ID
-          // or vocabulary prompting API. Never claim a hint was applied.
-          {"language", "auto"}, {"includedTerms", json::array()}, {"omittedTerms", terms},
-          {"tokenCount", 0}, {"tokenBudget", 0}});
+          // Parakeet auto-selects the spoken language but exposes no language ID.
+          {"language", "auto"},
+          {"includedTerms", boosted > 0 ? json(terms) : json::array()},
+          {"omittedTerms", boosted > 0 ? json::array() : json(terms)},
+          // Boosting has no prompt; report boosted phrases against the term count.
+          {"tokenCount", boosted > 0 ? boosted : 0}, {"tokenBudget", boosted > 0 ? static_cast<int>(terms.size()) : 0}});
 }
 
 } // namespace
