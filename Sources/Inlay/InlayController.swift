@@ -817,6 +817,13 @@ final class InlayController: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([sounds.directory])
     }
 
+    /// Unconditional: the transcript replaces whatever the clipboard holds.
+    private static func copyAsFallback(_ text: String) -> Bool {
+        guard !Task.isCancelled else { return false }
+        if case .success = DictationClipboard.copy(text, to: .general) { return true }
+        return false
+    }
+
     func copyLastTranscript() {
         guard !lastTranscript.isEmpty, !isBusy else { return }
         switch DictationClipboard.copy(lastTranscript, to: .general) {
@@ -1215,17 +1222,30 @@ final class InlayController: ObservableObject {
                 }
                 message = "Inserted at your cursor"; deliveryStatus = .inserted; status = "Inserted"
                 cue(.success)
-            case .copied(let reason):
-                transcript = record.finalText; message = reason; deliveryStatus = .copied; status = "Copied"
+            case .copied:
+                transcript = record.finalText
+                message = "Could not paste here. Copied to clipboard: press ⌘V."
+                deliveryStatus = .copied; status = "Copied"
                 cue(.alert)
             case .unconfirmed(let backup):
                 transcript = record.finalText
-                message = backup ? "Insertion unconfirmed. Copied to clipboard if needed." : "Insertion unconfirmed. Your words are here to copy."
+                message = backup || Self.copyAsFallback(record.finalText)
+                    ? "The paste could not be confirmed. Copied to clipboard: press ⌘V if it is missing."
+                    : "Insertion unconfirmed. Your words are here to copy."
                 deliveryStatus = .unconfirmed; status = "Check insertion"
                 cue(.alert)
             case .failed(let reason):
-                transcript = record.finalText; message = reason; deliveryStatus = .failed; status = "Ready to copy"
-                cue(.error)
+                transcript = record.finalText
+                // Text that could not be pasted always lands on the clipboard,
+                // even over something copied during the take: ⌘V is the fallback.
+                if Self.copyAsFallback(record.finalText) {
+                    message = "Could not paste here. Copied to clipboard: press ⌘V."
+                    deliveryStatus = .copied; status = "Copied"
+                    cue(.alert)
+                } else {
+                    message = reason; deliveryStatus = .failed; status = "Ready to copy"
+                    cue(.error)
+                }
             }
         }
         lastTranscript = transcript
