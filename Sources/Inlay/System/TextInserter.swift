@@ -375,9 +375,10 @@ final class TextInserter {
         }
         // Only a definitely unattempted/unsupported menu action can fall back.
         // Never send a second route after a successful or timed-out AX action.
+        let pasteKey = KeyboardLayout.keyCode(producing: "v") ?? 9
         guard let source = CGEventSource(stateID: .combinedSessionState),
-              let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else {
+              let down = CGEvent(keyboardEventSource: source, virtualKey: pasteKey, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: pasteKey, keyDown: false) else {
             return .unavailable
         }
         down.flags = .maskCommand
