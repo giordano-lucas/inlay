@@ -286,6 +286,10 @@ extension Components {
             public var textCorrectionEnabled: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/ServerPreferences/keepOriginalAudio`.
             public var keepOriginalAudio: Swift.Bool
+            /// Write spoken English and French numbers as digits in the final text. Absent means false.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ServerPreferences/numbersAsDigits`.
+            public var numbersAsDigits: Swift.Bool?
             /// Creates a new `ServerPreferences`.
             ///
             /// - Parameters:
@@ -295,13 +299,15 @@ extension Components {
             ///   - dictionary:
             ///   - textCorrectionEnabled:
             ///   - keepOriginalAudio:
+            ///   - numbersAsDigits: Write spoken English and French numbers as digits in the final text. Absent means false.
             public init(
                 language: Components.Schemas.ServerPreferences.LanguagePayload,
                 proofreadingPrompt: Swift.String? = nil,
                 vocabulary: Swift.String,
                 dictionary: Components.Schemas.PersonalDictionary,
                 textCorrectionEnabled: Swift.Bool,
-                keepOriginalAudio: Swift.Bool
+                keepOriginalAudio: Swift.Bool,
+                numbersAsDigits: Swift.Bool? = nil
             ) {
                 self.language = language
                 self.proofreadingPrompt = proofreadingPrompt
@@ -309,6 +315,7 @@ extension Components {
                 self.dictionary = dictionary
                 self.textCorrectionEnabled = textCorrectionEnabled
                 self.keepOriginalAudio = keepOriginalAudio
+                self.numbersAsDigits = numbersAsDigits
             }
             public enum CodingKeys: String, CodingKey {
                 case language
@@ -317,6 +324,7 @@ extension Components {
                 case dictionary
                 case textCorrectionEnabled
                 case keepOriginalAudio
+                case numbersAsDigits
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -344,13 +352,18 @@ extension Components {
                     Swift.Bool.self,
                     forKey: .keepOriginalAudio
                 )
+                self.numbersAsDigits = try container.decodeIfPresent(
+                    Swift.Bool.self,
+                    forKey: .numbersAsDigits
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "language",
                     "proofreadingPrompt",
                     "vocabulary",
                     "dictionary",
                     "textCorrectionEnabled",
-                    "keepOriginalAudio"
+                    "keepOriginalAudio",
+                    "numbersAsDigits"
                 ])
             }
         }

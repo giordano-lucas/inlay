@@ -200,6 +200,8 @@ struct ServerPreferencesPage: View {
                     Text("Parakeet recognizes 25 European languages automatically. Use Automatic for other proofreading languages.")
                         .font(.caption).foregroundStyle(InlayPalette.muted)
                     Toggle("Proofread with Qwen", isOn: $draft.textCorrectionEnabled)
+                    Toggle("Write numbers as digits", isOn: $draft.numbersAsDigits)
+                        .help("“Three thousand and three” becomes 3003 in English and French. Lone small numbers stay words unless a unit or “number”, “version”, or “page” marks them.")
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text("Cleanup instructions")

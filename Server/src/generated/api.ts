@@ -338,6 +338,8 @@ export interface components {
       dictionary: components["schemas"]["PersonalDictionary"];
       textCorrectionEnabled: boolean;
       keepOriginalAudio: boolean;
+      /** @description Write spoken English and French numbers as digits in the final text. Absent means false. */
+      numbersAsDigits?: boolean;
     };
     PreferencesSnapshot: {
       revision: number;
