@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
@@ -16,11 +17,14 @@ export interface InferenceConfiguration {
   vadModel: string;
   proofHelper: string;
   proofModel: string;
+  /** Optional Whisper model, loaded in a one-shot process only for a retry. */
+  retryModel?: string;
   threads: number;
   speechLoadTimeout: number;
   speechTimeout: number;
   proofLoadTimeout: number;
   proofTimeout: number;
+  retryTimeout: number;
 }
 
 type ConfigurationInput = Pick<
@@ -49,6 +53,7 @@ export function createInferenceConfiguration(input: ConfigurationInput): Inferen
     speechTimeout: deadline(input.speechTimeout, 180),
     proofLoadTimeout: deadline(input.proofLoadTimeout, 30),
     proofTimeout: deadline(input.proofTimeout, 18),
+    retryTimeout: deadline(input.retryTimeout, 120),
   };
 }
 
@@ -67,6 +72,14 @@ export interface SpeechInferenceResult {
   engineVersion?: string;
   modelSHA256?: string;
   hints?: ModelHintUsage;
+  /** Set when a model other than Parakeet produced the text. */
+  modelID?: string;
+}
+
+export interface RetryInferenceResult {
+  text: string;
+  language: string;
+  processingSeconds: number;
 }
 
 export interface ProofInferenceResult {
@@ -93,6 +106,12 @@ export interface InferenceBackend {
     systemPrompt: string,
     signal?: AbortSignal,
   ): Promise<ProofInferenceResult>;
+  /** Recognize again with the retry model; undefined when none is configured. */
+  retranscribe?(
+    audioPath: string,
+    prompt: string,
+    signal?: AbortSignal,
+  ): Promise<RetryInferenceResult | undefined>;
   cancel(): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -249,6 +268,86 @@ export class NativeInference implements InferenceBackend {
       await this.verifier.verify(this.configuration.proofModel, this.proofPin, signal);
       await this.proof.ensureLoaded(signal);
     }
+  }
+
+  /** Runs the speech helper once in retry mode. The process loads the Whisper
+   * model, prints one result, and exits, so its memory is never kept warm. */
+  async retranscribe(
+    audioPath: string,
+    prompt: string,
+    signal?: AbortSignal,
+  ): Promise<RetryInferenceResult | undefined> {
+    const config = this.configuration;
+    if (!config.retryModel) return undefined;
+    checkCancellation(signal);
+    await access(config.retryModel, constants.R_OK);
+    const output = await new Promise<string>((resolve, reject) => {
+      const child = spawn(
+        config.speechHelper,
+        [
+          "--retry-model",
+          config.retryModel!,
+          "--transcribe",
+          audioPath,
+          "--language",
+          "auto",
+          "--prompt",
+          prompt,
+          "--threads",
+          String(config.threads),
+        ],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      let stdout = "";
+      const stop = (error: InferenceError) => {
+        child.kill("SIGKILL");
+        reject(error);
+      };
+      const timer = setTimeout(
+        () => stop(new InferenceError("timeout", "The retry model timed out.")),
+        config.retryTimeout * 1000,
+      );
+      const abort = () => stop(new InferenceError("cancelled"));
+      signal?.addEventListener("abort", abort, { once: true });
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+        if (stdout.length > 1_048_576)
+          stop(new InferenceError("invalidResponse", "Retry output too long."));
+      });
+      child.on("error", () =>
+        stop(new InferenceError("unavailable", "The retry model could not start.")),
+      );
+      child.on("close", () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+        resolve(stdout);
+      });
+    });
+    checkCancellation(signal);
+    const line = output.trim().split("\n").at(-1) ?? "";
+    let response: { type?: unknown; text?: unknown; language?: unknown; elapsed?: unknown };
+    try {
+      response = JSON.parse(line) as typeof response;
+    } catch {
+      throw new InferenceError("invalidResponse", "The retry model returned no result.");
+    }
+    if (
+      response.type !== "result" ||
+      typeof response.text !== "string" ||
+      bytes(response.text) > 256 * 1024 ||
+      typeof response.language !== "string" ||
+      typeof response.elapsed !== "number" ||
+      !Number.isFinite(response.elapsed)
+    )
+      throw new InferenceError(
+        "invalidResponse",
+        "The retry model returned an invalid transcript.",
+      );
+    return {
+      text: response.text,
+      language: response.language,
+      processingSeconds: response.elapsed,
+    };
   }
 
   async transcribe(

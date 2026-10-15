@@ -13,6 +13,7 @@ import type {
   FinishGenerationRequest,
   GenerationPage,
   GenerationRecord,
+  PersonalDictionary,
   PreferencesSnapshot,
   ServerHealth,
   ServerPreferences,
@@ -25,7 +26,7 @@ import type { components } from "./generated/api.ts";
 import { API_VERSION } from "./api.ts";
 import { decodePersonalDictionary } from "./domain/dictionary.ts";
 import { validateBody } from "./validation.ts";
-import type { InferenceBackend } from "./inference/native-inference.ts";
+import type { InferenceBackend, SpeechInferenceResult } from "./inference/native-inference.ts";
 import { InferenceError } from "./inference/inference-error.ts";
 import { ServiceError } from "./errors.ts";
 import {
@@ -1060,7 +1061,7 @@ export class GenerationService {
       // The speech helper runs one request at a time; let a live preview finish.
       await this.livePreview;
       signal.throwIfAborted();
-      const speech = await this.inference.transcribe(
+      const parakeet = await this.inference.transcribe(
         join(this.directory(id), "inference.wav"),
         settings.language,
         // Single-word dictionary terms bias Parakeet's decoding toward their spelling.
@@ -1071,12 +1072,14 @@ export class GenerationService {
         signal,
       );
       signal.throwIfAborted();
+      const speech = await this.recoverDroppedSpeech(id, parakeet, settings.dictionary, signal);
+      signal.throwIfAborted();
       record.rawText = speech.text;
       record.detectedLanguage = speech.language === "auto" ? undefined : speech.language;
       record.recognitionHints = speech.hints;
       record.speech = {
-        modelID: "parakeet-tdt-0.6b-v3",
-        modelSHA256: speech.modelSHA256,
+        modelID: speech.modelID ?? "parakeet-tdt-0.6b-v3",
+        modelSHA256: speech.modelID ? undefined : speech.modelSHA256,
         backend: this.speechBackend,
         engineVersion: speech.engineVersion,
         processingSeconds: speech.processingSeconds,
@@ -1298,6 +1301,50 @@ export class GenerationService {
       await rm(path, { force: true }).catch(() => {});
     }
   }
+  /** Parakeet can drift out of a long multilingual take and drop most of it
+   * (38 s of French became 20 English words). A take that sparse is retried
+   * once with the Whisper retry model, and its text kept only when it
+   * recovers clearly more words. Normal speech runs about 3 words a second. */
+  private async recoverDroppedSpeech(
+    id: string,
+    speech: SpeechInferenceResult,
+    dictionary: PersonalDictionary,
+    signal: AbortSignal,
+  ): Promise<SpeechInferenceResult> {
+    const words = wordCount(speech.text);
+    if (!this.inference.retranscribe || speech.audioSeconds < 10 || words >= speech.audioSeconds)
+      return speech;
+    let prompt = "";
+    for (const term of dictionaryVocabularyTerms(dictionary)) {
+      const next = prompt ? `${prompt}, ${term}` : term;
+      if (Buffer.byteLength(next) > 4096) break;
+      prompt = next;
+    }
+    try {
+      const retry = await this.inference.retranscribe(
+        join(this.directory(id), "inference.wav"),
+        prompt,
+        signal,
+      );
+      if (!retry) return speech;
+      const recovered = wordCount(retry.text);
+      if (recovered < Math.max(words * 1.5, words + 10)) return speech;
+      console.log(
+        `Recovered take ${id} with the retry model: ${recovered} words instead of ${words} in ${speech.audioSeconds.toFixed(1)} s.`,
+      );
+      return {
+        ...speech,
+        text: retry.text,
+        language: retry.language,
+        processingSeconds: speech.processingSeconds + retry.processingSeconds,
+        modelID: "whisper-large-v3-turbo",
+      };
+    } catch (error) {
+      if (signal.aborted) throw error;
+      console.error(`The retry model failed for take ${id}:`, error);
+      return speech;
+    }
+  }
   private progress(id: string, value: number) {
     const record = this.records.get(id);
     if (!record || record.status !== "transcribing" || !Number.isFinite(value)) return;
@@ -1354,6 +1401,8 @@ export class GenerationService {
     return process.platform === "darwin" ? "MLX" : "llama.cpp";
   }
 }
+
+const wordCount = (text: string) => text.match(/[\p{L}\p{N}]+/gu)?.length ?? 0;
 
 /** A mono IEEE-float WAV header for raw little-endian float32 samples. */
 function floatWavHeader(dataBytes: number, sampleRate: number) {

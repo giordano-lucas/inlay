@@ -137,9 +137,12 @@ For server-only development alongside an installed Inlay instance, use `--port 8
 | `--speech-helper`, `--speech-model` | `INLAY_ENGINE_PATH`, `INLAY_SPEECH_MODEL`          |
 | `--vad-model`                       | `INLAY_VAD_PATH`                                   |
 | `--proof-helper`, `--proof-model`   | `INLAY_TEXT_ENGINE_PATH`, `INLAY_TEXT_MODEL`       |
+| `--retry-model` (optional)          | `INLAY_RETRY_MODEL`                                |
 | `--dev`                             | `INLAY_DEV=1`                                      |
 
 The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` when using the paths above. Without those overrides, macOS searches `~/Library/Application Support/Inlay/Models/ggml-parakeet-tdt-0.6b-v3-f16.bin` and `~/.inlay/models/Qwen3-4B-Instruct-2507-MLX-4bit`. Existing installations can retain their archive, token file, and Qwen model location with the arguments or overrides above, but must install the Parakeet weights; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
+
+With `--retry-model` pointing to a Whisper ggml model (`ggml-large-v3-turbo.bin` from huggingface.co/ggerganov/whisper.cpp), a take of 10 s or more that Parakeet returns at under one word per second is recognized again by Whisper in a one-shot process. Whisper's text replaces Parakeet's only when it has clearly more words; History then shows `whisper-large-v3-turbo` as the speech model.
 
 ## Remote access
 

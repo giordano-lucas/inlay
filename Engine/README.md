@@ -29,6 +29,10 @@ Requests are bounded to 1 MiB. Vocabulary allows at most 8,192 terms, 16 KiB per
 
 A CPU Silero pass rejects nonspeech (threshold 0.5, minimum speech segment 120 ms). If speech is detected, Parakeet receives the complete recording through `parakeet_full`, with greedy TDT decoding and request state reset. The output includes punctuation and capitalization. The full API supports recordings longer than the model's nominal context; memory use grows with recording length. Speech detection remains probabilistic and can miss quiet speech.
 
+## Retry mode
+
+`inlay-engine --retry-model PATH --transcribe WAV [--language auto] [--prompt TEXT] [--threads N]` recognizes one recording with a Whisper ggml model (for example `ggml-large-v3-turbo.bin`), prints one `result` line with `text`, `language`, `duration`, and `elapsed`, and exits. The server runs it only when Parakeet returns under one word per second of a take of 10 s or more, which happens when Parakeet drifts out of a long multilingual recording. The model is loaded for that run alone (about 1.9 GB on Apple silicon) and released when the process exits.
+
 The server keeps the model warm. Terminating the helper cancels active work. `{"type":"quit"}`, stdin EOF, or parent death releases it. Native dependencies and Metal source are embedded in the speech executable. whisper.cpp remains linked for Silero; no Whisper recognition model is loaded.
 
 ## Verify
