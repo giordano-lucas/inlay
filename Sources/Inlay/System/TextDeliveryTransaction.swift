@@ -168,9 +168,10 @@ struct TextDeliveryTransaction {
     }
 
     private func confirm(_ text: String) async -> DeliveryConfirmation {
-        let deadline = ContinuousClock.now.advanced(by: .milliseconds(700))
+        // Busy Electron apps can take over a second to show a paste.
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(1500))
         var lastObserved: DeliveryConfirmation = .pending
-        for attempt in 0...7 {
+        for attempt in 0...15 {
             guard !Task.isCancelled else { return .blocked }
             guard attempt == 0 || ContinuousClock.now < deadline else { break }
             lastObserved = await environment.confirmation(text)
@@ -178,7 +179,7 @@ struct TextDeliveryTransaction {
             // Editors without caret metadata still need time to consume their
             // queued paste before a newer pre-delivery clipboard is restored.
             guard lastObserved == .pending || lastObserved == .unavailable else { return lastObserved }
-            guard attempt < 7, ContinuousClock.now < deadline else { break }
+            guard attempt < 15, ContinuousClock.now < deadline else { break }
             do { try await environment.pause(100_000_000) }
             catch { return .blocked }
         }

@@ -142,6 +142,8 @@ enum InsertionCaretPolicy {
 final class TextInserter {
     private let pasteboard: NSPasteboard
     private(set) var confirmedAnchor: InsertionTarget?
+    /// The field already showed the text, so seeing it cannot confirm a paste.
+    private var textShownBeforePaste = false
 
     init(pasteboard: NSPasteboard? = nil) {
         self.pasteboard = pasteboard ?? .general
@@ -255,6 +257,8 @@ final class TextInserter {
         guard !Task.isCancelled else { return .failed(reason: "Dictation was cancelled. Nothing was copied.") }
         switch destination {
         case .field(let target):
+            let element = target.snapshot.focus.element
+            textShownBeforePaste = await Self.readOffMain { Self.fieldShows(text, in: element) }
             let environment = TextDeliveryEnvironment(
                 validate: { await Self.validate(target) },
                 modifiersAreHeld: { Self.modifiersAreHeld },
@@ -319,14 +323,21 @@ final class TextInserter {
         case .blocked: return .blocked
         case .changed: return .unavailable
         case .valid(let selection):
-            guard let original = expected.selection else { return .unavailable }
-            guard let selection else { return .pending }
-            if InsertionCaretPolicy.matches(selection, replacing: original, with: text) {
+            if let original = expected.selection, let selection,
+               InsertionCaretPolicy.matches(selection, replacing: original, with: text) {
                 confirmedAnchor = InsertionTarget(applicationName: target.applicationName,
                                                   application: target.application,
                                                   snapshot: expected.withSelection(selection))
                 return .confirmed
             }
+            // Terminals report no caret, and busy Electron apps update it late:
+            // text that newly appears in the field still confirms the paste.
+            if !textShownBeforePaste {
+                let element = expected.focus.element
+                if await Self.readOffMain({ Self.fieldShows(text, in: element) }) { return .confirmed }
+            }
+            guard let original = expected.selection else { return .unavailable }
+            guard let selection else { return .pending }
             return selection == original ? .pending : .unavailable
         }
     }
@@ -635,11 +646,21 @@ final class TextInserter {
     private nonisolated static func focusedFieldContains(_ text: String, in pid: pid_t) -> Bool {
         guard case .found(let focused) = readFocusedElement(), focused.applicationPID == pid,
               fieldEligibility(of: focused.element) == .editable else { return false }
+        return fieldShows(text, in: focused.element)
+    }
+
+    /// Whether the field's value ends a run of the text. Whitespace is ignored
+    /// because terminals wrap long lines; only the end is compared because
+    /// they scroll the start of a long paste out of view.
+    private nonisolated static func fieldShows(_ text: String, in element: AXUIElement) -> Bool {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(focused.element, kAXValueAttribute as CFString, &value) == .success,
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
               let current = value as? String else { return false }
-        let inserted = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !inserted.isEmpty && current.contains(inserted)
+        let compact = { (string: String) in string.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) } }
+        let inserted = compact(text)
+        guard !inserted.isEmpty else { return false }
+        let tail = String(String.UnicodeScalarView(inserted.suffix(80)))
+        return String(String.UnicodeScalarView(compact(current))).contains(tail)
     }
 
     /// Chromium browsers and Electron apps ship a renderer helper; only they
