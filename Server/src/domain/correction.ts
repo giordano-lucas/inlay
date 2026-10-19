@@ -1,5 +1,6 @@
 import type { TextProcessingRecord, VerifiedTextRepair } from "../api.ts";
 import { caseFold } from "./dictionary.ts";
+import { digitizeNumbers } from "./numbers.ts";
 
 /** Conservative deterministic validation after a generative proofread. */
 export const maxInputCharacters = 6_000;
@@ -185,7 +186,7 @@ export function evaluateCorrection(
   const repairCheck = verifyRepairs(original, output);
   verifiedRepairs = repairCheck.repairs;
   const protectedSource = repairCheck.protectedSource;
-  if (!same(numbers(protectedSource), numbers(output)))
+  if (!same(writtenNumbers(protectedSource), writtenNumbers(output)))
     return reject("The rewrite changed a number.");
   const foldedSource = preferredTerms.length ? foldedIndex(protectedSource) : undefined;
   const foldedOutput = preferredTerms.length ? foldedIndex(output) : undefined;
@@ -196,10 +197,11 @@ export function evaluateCorrection(
   }
   const before = words(protectedSource);
   const after = words(output);
+  // Compared as the digit rule writes them: "ten" and "10" are the same quantity.
   if (
     !same(
-      before.filter((word) => quantities.has(word)),
-      after.filter((word) => quantities.has(word)),
+      words(digitizeNumbers(protectedSource)).filter((word) => quantities.has(word)),
+      words(digitizeNumbers(output)).filter((word) => quantities.has(word)),
     )
   )
     return reject("The rewrite changed a quantity.");
@@ -245,6 +247,11 @@ function intersection(left: Set<string>, right: string[]) {
 
 function numbers(text: string) {
   return matches(numberPattern, text).map((match) => match[0].replace(/\p{White_Space}/gu, ""));
+}
+
+/** Numbers as the digit rule writes them, so "ten percent" and "10%" agree. */
+function writtenNumbers(text: string) {
+  return numbers(digitizeNumbers(text)).map((number) => number.replace(/,/g, ""));
 }
 
 function listMarkers(text: string) {
@@ -422,24 +429,46 @@ function alignment(before: Token[], after: Token[], preferred: Set<string>) {
   return result.reverse();
 }
 
+/** Drops a run of up to four words that immediately repeats the run before it. */
+function withoutRepeats(input: Token[]) {
+  const kept: Token[] = [];
+  for (const token of input) {
+    kept.push(token);
+    for (let size = 1; size <= 4 && size * 2 <= kept.length; size++) {
+      const end = kept.length;
+      const repeated = kept
+        .slice(end - size)
+        .every((current, offset) => current.word === kept[end - 2 * size + offset]!.word);
+      if (repeated) {
+        kept.splice(end - size, size);
+        break;
+      }
+    }
+  }
+  return kept;
+}
+
 function preservationReason(original: string, candidate: string, preferred: Set<string>) {
   const output = tokens(candidate);
-  const input = recognizedTerms(
+  let recognized = recognizedTerms(
     original,
     intersection(
       preferred,
       output.map((token) => token.word),
     ),
   );
-  const inputNegatives = input.flatMap((token, index) => (isNegative(token.word) ? [index] : []));
+  const negativeWords = (list: Token[]) =>
+    list.filter((token) => isNegative(token.word)).map((token) => token.word);
   const outputNegatives = output.flatMap((token, index) => (isNegative(token.word) ? [index] : []));
-  if (
-    !same(
-      inputNegatives.map((index) => input[index]!.word),
-      outputNegatives.map((index) => output[index]!.word),
-    )
-  )
-    return "The rewrite changed a negation.";
+  // A stutter ("I didn't, I didn't understand") repeats one negation; the cleanup keeps one.
+  if (!same(negativeWords(recognized), negativeWords(output))) {
+    const collapsed = withoutRepeats(recognized);
+    if (!same(negativeWords(collapsed), negativeWords(output)))
+      return "The rewrite changed a negation.";
+    recognized = collapsed;
+  }
+  const input = recognized;
+  const inputNegatives = input.flatMap((token, index) => (isNegative(token.word) ? [index] : []));
   const aligned = alignment(input, output, preferred);
   const matchedOutput = new Set(aligned.map((pair) => pair[1]));
   if (output.some((token, index) => preferred.has(token.word) && !matchedOutput.has(index)))
