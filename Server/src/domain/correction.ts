@@ -16,6 +16,22 @@ const markerPattern = /^[\t ]*(?:[0-9]+[.)]|[-*•])[\t ]+/gm;
 const numberPattern =
   /[\p{Sc}+−-]?\p{White_Space}*\p{N}+(?:[.,:/-]\p{N}+)*(?:\p{White_Space}*[%‰])?/gu;
 const hesitations = new Set(["um", "uh", "er", "err", "erm"]);
+const discourse = new Set([
+  ...hesitations,
+  "and",
+  "but",
+  "so",
+  "then",
+  "like",
+  "okay",
+  "ok",
+  "yeah",
+  "well",
+  "also",
+  "just",
+  "right",
+  "actually",
+]);
 const negatives = new Set([
   "no",
   "not",
@@ -200,8 +216,8 @@ export function evaluateCorrection(
   // Compared as the digit rule writes them: "ten" and "10" are the same quantity.
   if (
     !same(
-      words(digitizeNumbers(protectedSource)).filter((word) => quantities.has(word)),
-      words(digitizeNumbers(output)).filter((word) => quantities.has(word)),
+      words(comparableNumbers(protectedSource)).filter((word) => quantities.has(word)),
+      words(comparableNumbers(output)).filter((word) => quantities.has(word)),
     )
   )
     return reject("The rewrite changed a quantity.");
@@ -226,6 +242,7 @@ export function evaluateCorrection(
   ) {
     return reject("The rewrite changed too much wording.");
   }
+  if (repeatedSentence(protectedSource, output)) return reject("The rewrite repeated a sentence.");
   const reason = preservationReason(protectedSource, output, allowed);
   if (reason) return reject(reason);
   const originalItems = listItems(protectedSource);
@@ -241,6 +258,20 @@ export function evaluateCorrection(
   return reject();
 }
 
+/** A sentence of 3 or more words that the rewrite says more often than the speaker did. */
+function repeatedSentence(original: string, output: string) {
+  const counts = (text: string) => {
+    const result = new Map<string, number>();
+    for (const sentence of text.split(/[.!?]+(?:\p{White_Space}|$)|\n/u)) {
+      const key = words(sentence).join(" ");
+      if (key.split(" ").length >= 3) result.set(key, (result.get(key) ?? 0) + 1);
+    }
+    return result;
+  };
+  const before = counts(original);
+  return [...counts(output)].some(([key, count]) => count > 1 && count > (before.get(key) ?? 0));
+}
+
 function intersection(left: Set<string>, right: string[]) {
   return new Set(right.filter((word) => left.has(word)));
 }
@@ -251,7 +282,37 @@ function numbers(text: string) {
 
 /** Numbers as the digit rule writes them, so "ten percent" and "10%" agree. */
 function writtenNumbers(text: string) {
-  return numbers(digitizeNumbers(text)).map((number) => number.replace(/,/g, ""));
+  return numbers(comparableNumbers(text)).map((number) => number.replace(/,/g, ""));
+}
+
+const smallNumbers =
+  "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split(
+    " ",
+  );
+
+/** "three" and "3": the cleanup may write as digits a number the digit rule leaves as a word. */
+function sameNumber(left: string, right: string) {
+  const word = smallNumbers.indexOf(left) >= 0 ? left : right;
+  return String(smallNumbers.indexOf(word)) === (word === left ? right : left);
+}
+
+/**
+ * The digit rule's output, made comparable with a cleanup that also writes the numbers it leaves
+ * as words ("one, two, three" and "1, 2, 3"), drops a spoken stutter ("two two tiers"), writes a
+ * score ("five over five" and "5/5"), or spells out "sec".
+ */
+function comparableNumbers(text: string) {
+  return digitizeNumbers(text)
+    .replace(/\b[a-z]+\b/giu, (word) => {
+      const index = smallNumbers.indexOf(lowercase(word));
+      return index < 0 ? word : String(index);
+    })
+    .replace(
+      /\b([0-9]+)\p{White_Space}+(?:over|out\p{White_Space}+of)\p{White_Space}+([0-9]+)\b/giu,
+      "$1/$2",
+    )
+    .replace(/\b([0-9]+)(?:\p{White_Space}+\1)+\b/gu, "$1")
+    .replace(/\bsec(s?)\b/giu, "second$1");
 }
 
 function listMarkers(text: string) {
@@ -362,7 +423,7 @@ function editDistance(left: string, right: string) {
 function equivalence(preferred: Set<string>) {
   const cache = new Map<string, Map<string, boolean>>();
   return (left: string, right: string) => {
-    if (left === right) return true;
+    if (left === right || sameNumber(left, right)) return true;
     if (!preferred.has(right)) return false;
     let matches = cache.get(left);
     if (!matches) {
@@ -489,7 +550,9 @@ function preservationReason(original: string, candidate: string, preferred: Set<
       return "The rewrite moved a negation to different wording.";
   }
   const retained = new Set(aligned.map((pair) => pair[0]));
-  for (const unit of answerUnits(original, input)) {
+  for (const whole of answerUnits(original, input)) {
+    // A cleanup drops discourse words ("But then what's next?", "Like why?"); the rest must stay.
+    const unit = whole.filter((index) => !discourse.has(input[index]!.word));
     if (!unit.length) continue;
     const minimum = unit.length <= 4 ? unit.length : Math.max(1, Math.ceil(unit.length * 0.5));
     if (unit.filter((index) => retained.has(index)).length < minimum)
