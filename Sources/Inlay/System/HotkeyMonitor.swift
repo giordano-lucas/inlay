@@ -1,5 +1,8 @@
 import AppKit
 import CoreGraphics
+import OSLog
+
+private let hotkeyLog = Logger(subsystem: "dev.davis.inlay", category: "hotkey")
 
 enum HoldKey: String, CaseIterable, Identifiable {
     case rightOption
@@ -202,6 +205,10 @@ final class HotkeyMonitor {
     var onPress: (() -> Bool)?
     var onRelease: (() -> Void)?
     var onCancel: (() -> Void)?
+    /// An accepted hold ended by something other than its own release or
+    /// Escape: a chord (another key or modifier, which apps can also post) or
+    /// listener recovery. The controller decides whether the take is kept.
+    var onInterrupt: (() -> Void)?
     /// Tap health, not a claim that a particular key event was delivered.
     var onStatusChange: ((Bool) -> Void)?
     /// Set only during an explicit, bounded shortcut check. No persistent log.
@@ -339,6 +346,7 @@ final class HotkeyMonitor {
                     release()
                 }
             } else if physicalDown, key.hasOtherModifiers(in: event.flags) {
+                logInterruption(type: type, code: code, event: event)
                 blockCurrentHold()
             }
         case .keyDown:
@@ -353,6 +361,7 @@ final class HotkeyMonitor {
                     beginHold(flags: event.flags)
                 }
             } else if physicalDown {
+                logInterruption(type: type, code: code, event: event)
                 blockCurrentHold()
             }
         case .keyUp:
@@ -449,8 +458,19 @@ final class HotkeyMonitor {
         // keeps recording; the blocked press just doesn't count as a tap.
         if active, mode == .hold {
             active = false
-            onCancel?()
+            onInterrupt?()
         }
+    }
+
+    /// Persistent, so a take lost to a chord can be traced to the app that
+    /// sent it. Only the interrupting event: the key code is logged for
+    /// modifiers alone, never for typed characters.
+    private func logInterruption(type: CGEventType, code: CGKeyCode, event: CGEvent) {
+        guard active, mode == .hold else { return }
+        let pid = pid_t(truncatingIfNeeded: event.getIntegerValueField(.eventSourceUnixProcessID))
+        let sender = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "pid \(pid)"
+        let kind = type == .flagsChanged ? "modifier \(code)" : type == .keyDown ? "key down" : "event \(type.rawValue)"
+        hotkeyLog.notice("Hold interrupted by \(kind, privacy: .public), flags 0x\(String(event.flags.rawValue, radix: 16), privacy: .public), sent by \(sender, privacy: .public)")
     }
 
     private func release() {
@@ -631,7 +651,10 @@ final class HotkeyMonitor {
         lastTapAt = nil
         watchdog?.cancel()
         watchdog = nil
-        if cancelActive, wasActive, !latched { onCancel?() }
+        if cancelActive, wasActive, !latched {
+            hotkeyLog.notice("Hold interrupted by listener recovery")
+            onInterrupt?()
+        }
     }
 
     deinit {

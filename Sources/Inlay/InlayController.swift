@@ -902,6 +902,15 @@ final class InlayController: ObservableObject {
             else if isBusy { cancelDictation() }
             else { dismissFeedback() }
         }
+        hotkey.onInterrupt = { [weak self] in
+            guard let self else { return }
+            if isCheckingShortcut { appendShortcutCheck("Hold cancelled; microphone stayed off.") }
+            // A chord just after the press was meant as a shortcut. Later, the
+            // take is speech: transcribe it instead of discarding it.
+            else if activity == .recording, !isShuttingDown,
+                    ProcessInfo.processInfo.systemUptime - recordingStart >= Self.keptInterruptionSeconds { finishDictation() }
+            else if isBusy { cancelDictation() }
+        }
     }
 
     /// Returns whether a take actually started. A double-tap monitor latches
@@ -1008,6 +1017,9 @@ final class InlayController: ObservableObject {
         }
         return true
     }
+
+    /// An interrupted hold at least this long is transcribed rather than cancelled.
+    private static let keptInterruptionSeconds: TimeInterval = 2
 
     private func finishDictation(atLimit: Bool = false) {
         guard isCapturing else { return }
